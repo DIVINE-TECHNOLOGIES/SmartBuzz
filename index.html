@@ -42,6 +42,36 @@
   /* Layout */
   .app { display: flex; min-height: 100vh; }
 
+  /* Welcome overlay */
+  .welcome-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.65);
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(6px);
+  }
+
+  .welcome-card {
+    width: 560px;
+    max-width: 95vw;
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius);
+    padding: 28px;
+  }
+
+  .welcome-favicon {
+    width: 72px;
+    height: 72px;
+    border-radius: 18px;
+    display: block;
+    margin: 0 auto 16px;
+  }
+
+
   /* Sidebar */
   .sidebar {
     width: 220px;
@@ -458,6 +488,16 @@
 
 <div class="app">
 
+
+  <div class="welcome-overlay" id="welcome-overlay" style="display:flex;">
+    <div class="welcome-card">
+      <img class="welcome-favicon" src="Images/Favicon.ico" alt="SmartBuzz">
+      <div style="text-align:center;font-family:'Playfair Display',serif;font-size:22px;font-weight:700;">SmartBuzz Pro</div>
+      <div style="text-align:center;color:var(--muted);font-size:12px;margin-top:4px;">GST Business Suite</div>
+    </div>
+  </div>
+
+
   <!-- Sidebar -->
   <nav class="sidebar">
     <div class="logo">
@@ -654,11 +694,14 @@
 
             <h3 style="font-size:14px;font-weight:600;margin-bottom:12px;">Add Items</h3>
             <div class="flex gap-2 mb-3">
-              <select id="bill-item-select" style="flex:1;">
+              <select id="bill-item-select" style="flex:1;" onchange="populateBillVariantDropdown()">
                 <option value="">Select Product</option>
               </select>
+              <select id="bill-item-variant-select" style="flex:1;">
+                <option value="">Variant (optional)</option>
+              </select>
               <input type="number" id="bill-item-qty" value="1" min="1" style="width:80px;">
-              <button class="btn btn-outline" onclick="addBillItem()">Add</button>
+          <button class="btn btn-outline" onclick="addBillItem()">Add</button>
             </div>
 
             <table id="bill-items-table" style="font-size:12px;">
@@ -914,6 +957,36 @@
           <option>pcs</option><option>kg</option><option>g</option><option>litre</option><option>ml</option><option>box</option><option>pack</option><option>dozen</option>
         </select>
       </div>
+
+      <!-- Variants / Classification -->
+      <div class="form-group" style="grid-column:span 2;">
+        <label class="form-label">Classification / Variants (size, color, etc.)</label>
+        <div style="background:var(--surface2);border:1px solid var(--border2);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:10px;">
+          <div class="flex gap-2 items-center" style="flex-wrap:wrap;">
+            <input type="text" id="v-name" placeholder="Variant name e.g. Red / 500ml / XL" style="flex:1;min-width:220px;">
+            <input type="number" id="v-stock" placeholder="Stock" min="0" style="width:120px;">
+            <input type="number" id="v-price" placeholder="Selling Price (₹)" step="0.01" style="width:180px;">
+            <button class="btn btn-outline btn-sm" type="button" onclick="addVariantRow()">+ Add Variant</button>
+          </div>
+          <div class="text-muted text-sm">If you add variants, billing/sales will use variant-wise price & stock. If no variants are added, the base product stock & price will be used.</div>
+
+          <table style="font-size:12px;">
+            <thead>
+              <tr>
+                <th>Variant</th>
+                <th>Stock</th>
+                <th>Price</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="variants-body"></tbody>
+          </table>
+
+          <div class="flex gap-2" style="justify-content:flex-end;">
+            <button class="btn btn-outline btn-sm" type="button" onclick="clearVariants()">Clear Variants</button>
+          </div>
+        </div>
+      </div>
     </div>
     <div class="mt-4 flex gap-2" style="justify-content:flex-end;">
       <button class="btn btn-outline" onclick="closeModal('product-modal')">Cancel</button>
@@ -981,8 +1054,11 @@
 
     <h4 style="font-size:13px;font-weight:600;margin-bottom:10px;">Items Sold</h4>
     <div class="flex gap-2 mb-3">
-      <select id="s-item-select" style="flex:1;">
+      <select id="s-item-select" style="flex:1;" onchange="populateSaleVariantDropdown()">
         <option value="">Select Product</option>
+      </select>
+      <select id="s-item-variant-select" style="flex:1;">
+        <option value="">Variant (optional)</option>
       </select>
       <input type="number" id="s-item-qty" value="1" min="1" style="width:80px;">
       <button class="btn btn-outline btn-sm" onclick="addSaleItem()">Add</button>
@@ -1007,17 +1083,22 @@
 <!-- Toast Container -->
 <div class="toast-container" id="toast-container"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+// (Supabase CDN is loaded separately in `window.supabase`)
+
 // =========================================================
 // DATA STORE
 // =========================================================
 let data = {
+
   products: [],
   customers: [],
   sales: [],
   bills: [],
   waLog: [],
   invoiceCounter: 1,
+  classifications: [],
   businessInfo: {
     name: "",
     gstin: "",
@@ -1037,14 +1118,56 @@ let currentBillTab = 'create';
 // =========================================================
 // INIT
 // =========================================================
-function init() {
-  loadData();
+function showWelcome(minMs = 500) {
+  const el = document.getElementById('welcome-overlay');
+  if (!el) return { done: () => {} };
 
+  const started = Date.now();
+  el.style.display = 'flex';
+  return {
+    done: () => {
+      const elapsed = Date.now() - started;
+      window.setTimeout(() => {
+        el.style.display = 'none';
+      }, Math.max(0, minMs - elapsed));
+    }
+  };
+}
+
+function showPageLoading(message = 'Loading…') {
+  return { done: () => {} };
+}
+
+
+function init() {
+  const w = showWelcome(700);
+
+  // Load supabase session (if configured), then load data.
+  // If Supabase is not configured yet, it falls back to localStorage.
+  initSupabase().then(async () => {
+    await loadData();
+    afterInit();
+    w?.done?.();
+  }).catch(async (e) => {
+    console.warn('initSupabase failed; falling back to localStorage.', e);
+    await loadData();
+    afterInit();
+    w?.done?.();
+  });
+}
+
+
+function afterInit() {
   // Do not seed any sample/demo data.
   // The UI will start empty unless the user already has stored data.
-  document.getElementById('today-date').textContent = new Date().toLocaleDateString('en-IN', {day:'numeric',month:'short',year:'numeric'});
-  document.getElementById('bill-date').value = today();
-  document.getElementById('s-date').value = today();
+  const todayEl = document.getElementById('today-date');
+  if (todayEl) {
+    todayEl.textContent = new Date().toLocaleDateString('en-IN', {day:'numeric',month:'short',year:'numeric'});
+  }
+  const billDateEl = document.getElementById('bill-date');
+  if (billDateEl) billDateEl.value = today();
+  const saleDateEl = document.getElementById('s-date');
+  if (saleDateEl) saleDateEl.value = today();
 
   renderAll();
   updateExpiryBadge();
@@ -1058,16 +1181,186 @@ function seedData() {
   // Sample/demo data intentionally removed.
 }
 
-function saveData() { try { localStorage.setItem('biztrack', JSON.stringify(data)); } catch(e) {} }
-function loadData() {
-  try {
-    // Remove any previously stored sample/demo data.
-    localStorage.removeItem('biztrack');
+// =========================================================
+// Supabase (multi-tenant) wiring
+// =========================================================
+// 1) Add your Supabase URL + anon key here
+//    - SUPABASE_URL: Project URL (e.g. https://xxxx.supabase.co)
+//    - SUPABASE_ANON_KEY: anon public key
+// 2) This app expects the user to be authenticated.
+//    - For quick start, we use anonymous auth (signInAnonymously).
+//    - Each logged-in user's rows are isolated by RLS on `user_id`.
+// 3) For atomic stock updates when recording a sale/bill,
+//    - set EDGE_FUNCTION_NAME below.
 
-    const d = localStorage.getItem('biztrack');
-    if (d) data = JSON.parse(d);
-  } catch (e) {}
+// If you haven't set these correctly yet, the app will automatically fall back to localStorage.
+const SUPABASE_URL = 'https://musrxmagzytvintjcfqd.supabase.co'; // expected: https://<ref>.supabase.co
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11c3J4bWFnenl0dmludGpjZnFkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwNjk5OTcsImV4cCI6MjA5MzY0NTk5N30.MSWKZ2-uThnpLY_Zg1eqbQmt9h7yf2VHT9poKS1KS_w';
+const EDGE_FUNCTION_NAME = 'decrement-stock-and-create-sale';
+
+let supabaseClient = null;
+let sessionUserId = null;
+
+function disableSupabase() {
+  supabaseClient = null;
+  sessionUserId = null;
 }
+
+async function initSupabase() {
+  try {
+    if (!SUPABASE_URL || SUPABASE_URL.includes('PASTE_')) return false;
+
+    // Supabase client should be loaded via CDN below.
+    if (!window.supabase) return false;
+
+    // Basic sanity: Supabase URL should look like https://xxxx.supabase.co
+    if (!/^https:\/\//i.test(SUPABASE_URL)) {
+      console.warn('Supabase URL does not look like an https:// URL. Disabling Supabase:', SUPABASE_URL);
+      return false;
+    }
+
+    // eslint-disable-next-line no-undef
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    const { data: sessionData } = await supabaseClient.auth.getSession();
+    if (sessionData?.session?.user) {
+      sessionUserId = sessionData.session.user.id;
+      return true;
+    }
+
+    // Quick dev auth: anonymous sign-in so auth.uid() works.
+    const { data: anonData, error: anonErr } = await supabaseClient.auth.signInAnonymously();
+    if (anonErr) {
+      console.warn('Anonymous Supabase sign-in failed; falling back to localStorage.', anonErr);
+      disableSupabase();
+      return false;
+    }
+    sessionUserId = anonData?.user?.id || null;
+    if (!sessionUserId) disableSupabase();
+    return !!sessionUserId;
+  } catch (e) {
+    console.warn('Supabase init failed; falling back to localStorage.', e);
+    disableSupabase();
+    return false;
+  }
+}
+
+function isSupabaseEnabled() {
+  return !!(SUPABASE_URL && !SUPABASE_URL.includes('PASTE_') && /^https:\/\//i.test(SUPABASE_URL) && supabaseClient && sessionUserId);
+}
+
+async function getSupabaseAuthHeader() {
+  const { data: sessionData } = await supabaseClient.auth.getSession();
+  const token = sessionData?.session?.access_token || SUPABASE_ANON_KEY;
+  return `Bearer ${token}`;
+}
+
+async function fetchAllFromSupabase() {
+  if (!isSupabaseEnabled()) return;
+
+  const [productsRes, customersRes, salesRes, billsRes, bpRes] = await Promise.all([
+    supabaseClient.from('products').select('*').order('created_at', { ascending: false }),
+    supabaseClient.from('customers').select('*').order('created_at', { ascending: false }),
+    supabaseClient.from('sales').select('*').order('sale_date', { ascending: false }),
+    supabaseClient.from('bills').select('*').order('bill_date', { ascending: false }),
+    supabaseClient.from('business_profiles').select('*').maybeSingle(),
+  ]);
+
+  if (productsRes.error) throw new Error(productsRes.error.message);
+  if (customersRes.error) throw new Error(customersRes.error.message);
+  if (salesRes.error) throw new Error(salesRes.error.message);
+  if (billsRes.error) throw new Error(billsRes.error.message);
+
+  data.products = (productsRes.data || []).map(p => ({
+    id: p.id,
+    name: p.name,
+    sku: p.sku,
+    category: p.category,
+    mrp: Number(p.mrp),
+    price: Number(p.price),
+    purchase: Number(p.purchase),
+    stock: Number(p.stock),
+    gst: Number(p.gst),
+    hsn: p.hsn,
+    expiry: p.expiry,
+    manufacturer: p.manufacturer,
+    unit: p.unit,
+    variants: p.variants || [],
+  }));
+
+  data.customers = (customersRes.data || []).map(c => ({
+    id: c.id,
+    name: c.name,
+    phone: c.phone,
+    email: c.email,
+    gstin: c.gstin,
+    city: c.city,
+    address: c.address,
+    purchases: c.purchases || [],
+  }));
+
+  data.sales = (salesRes.data || []).map(s => ({
+    id: s.id,
+    invNo: s.inv_no,
+    customerId: s.customer_id,
+    items: s.items || [],
+    subtotal: Number(s.subtotal),
+    gst: Number(s.gst),
+    total: Number(s.total),
+    date: s.sale_date,
+    payment: s.payment_mode,
+  }));
+
+  data.bills = (billsRes.data || []).map(b => ({
+    invNo: b.inv_no,
+    customerId: b.customer_id,
+    amount: Number(b.amount),
+    date: b.bill_date,
+    format: b.format,
+  }));
+
+  // Business info
+  if (bpRes?.data) {
+    const bp = bpRes.data;
+    data.businessInfo = {
+      name: bp.name,
+      gstin: bp.gstin,
+      address: bp.address,
+      phone: bp.phone,
+      email: bp.email,
+      state: bp.state,
+      stateCode: bp.state_code,
+    };
+  }
+
+  // invoiceCounter is now server-side; keep local UI fallback.
+}
+
+function saveData() {
+  // No-op in Supabase mode.
+}
+
+function loadData() {
+  // Backward compatibility: if Supabase is not configured yet,
+  // keep using localStorage.
+  return new Promise((resolve) => {
+    (async () => {
+      try {
+        if (isSupabaseEnabled()) {
+          await fetchAllFromSupabase();
+          resolve(true);
+          return;
+        }
+
+        const d = localStorage.getItem('biztrack');
+        if (d) data = JSON.parse(d);
+      } catch (e) {}
+      resolve(true);
+    })();
+  });
+}
+
+
 
 // =========================================================
 // NAVIGATION
@@ -1084,21 +1377,42 @@ const pageTitles = {
 };
 
 function navigate(page) {
+  // Page transitions: show a short loading overlay.
+  showPageLoading('Loading ' + (page.charAt(0).toUpperCase() + page.slice(1)) + '…');
+
+  // Defensive: if page is invalid or elements are missing, fail gracefully.
+  const pageEl = document.getElementById('page-' + page);
+  if (!pageEl) {
+    console.warn('navigate(): missing page element for', page);
+    return;
+  }
+
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  document.getElementById('page-' + page).classList.add('active');
-  document.querySelector(`.nav-item[onclick*="${page}"]`).classList.add('active');
-  const [title, sub] = pageTitles[page];
-  document.getElementById('page-title').textContent = title;
-  document.getElementById('page-sub').textContent = sub;
+
+  pageEl.classList.add('active');
+
+
+  const navMatch = document.querySelector(`.nav-item[onclick*="${page}"]`);
+  if (navMatch) navMatch.classList.add('active');
+
+  const meta = pageTitles[page];
+  if (meta) {
+    const [title, sub] = meta;
+    const titleEl = document.getElementById('page-title');
+    const subEl = document.getElementById('page-sub');
+    if (titleEl) titleEl.textContent = title;
+    if (subEl) subEl.textContent = sub;
+  }
+
   renderPage(page);
 }
 
 function renderPage(page) {
   if (page === 'dashboard') renderDashboard();
   else if (page === 'products') { populateProductDropdowns(); renderProductsTable(); }
-  else if (page === 'sales') { populateSaleDropdowns(); renderSalesTable(); }
-  else if (page === 'billing') { populateBillDropdowns(); renderBillHistory(); }
+  else if (page === 'sales') { populateSaleDropdowns(); renderSalesTable(); setTimeout(() => { populateSaleVariantDropdown(); }, 0); }
+  else if (page === 'billing') { populateBillDropdowns(); renderBillHistory(); setTimeout(() => { populateBillVariantDropdown(); }, 0); }
   else if (page === 'customers') renderCustomersTable();
   else if (page === 'expiry') renderExpiryPage();
   else if (page === 'whatsapp') renderWAPage();
@@ -1233,11 +1547,29 @@ function populateProductDropdowns() {
 
   // Bill product dropdown
   const billSel = document.getElementById('bill-item-select');
-  if (billSel) billSel.innerHTML = '<option value="">Select Product</option>' + data.products.map(p => `<option value="${p.id}">${p.name} — ₹${p.price} (Qty: ${p.stock})</option>`).join('');
+  if (billSel) {
+    billSel.innerHTML = '<option value="">Select Product</option>' + data.products.map(p => {
+      const hasVars = (p.variants || []).length > 0;
+      const displayStock = hasVars ? (p.variants || []).reduce((t,v)=>t+(Number(v.stock)||0),0) : p.stock;
+      const displayPrice = hasVars ? (p.variants || [])[0]?.price ?? p.price : p.price;
+      return `<option value="${p.id}">${p.name} — ₹${displayPrice} (Qty: ${displayStock})</option>`;
+    }).join('');
+  }
 
   // Sale product dropdown
   const saleSel = document.getElementById('s-item-select');
-  if (saleSel) saleSel.innerHTML = '<option value="">Select Product</option>' + data.products.map(p => `<option value="${p.id}">${p.name} — ₹${p.price} (Qty: ${p.stock})</option>`).join('');
+  if (saleSel) {
+    saleSel.innerHTML = '<option value="">Select Product</option>' + data.products.map(p => {
+      const hasVars = (p.variants || []).length > 0;
+      const displayStock = hasVars ? (p.variants || []).reduce((t,v)=>t+(Number(v.stock)||0),0) : p.stock;
+      const displayPrice = hasVars ? (p.variants || [])[0]?.price ?? p.price : p.price;
+      return `<option value="${p.id}">${p.name} — ₹${displayPrice} (Qty: ${displayStock})</option>`;
+    }).join('');
+  }
+
+  // Variant dropdown initial state
+  populateSaleVariantDropdown();
+  populateBillVariantDropdown();
 }
 
 function openProductModal(id) {
@@ -1257,17 +1589,25 @@ function openProductModal(id) {
     document.getElementById('p-expiry').value = p.expiry || '';
     document.getElementById('p-manufacturer').value = p.manufacturer || '';
     document.getElementById('p-unit').value = p.unit;
+    setVariantsUI(p.variants || []);
   } else {
     document.getElementById('product-modal-title').textContent = 'Add Product';
     document.getElementById('product-edit-id').value = '';
     ['p-name','p-sku','p-category','p-mrp','p-price','p-purchase','p-stock','p-hsn','p-expiry','p-manufacturer'].forEach(id => document.getElementById(id).value = '');
     document.getElementById('p-gst').value = '12';
     document.getElementById('p-unit').value = 'pcs';
+
+    // Clear variant UI
+    clearVariants(false);
+    document.getElementById('v-name').value = '';
+    document.getElementById('v-stock').value = '';
+    document.getElementById('v-price').value = '';
   }
   openModal('product-modal');
 }
 
-function saveProduct() {
+async function saveProduct() {
+
   const name = document.getElementById('p-name').value.trim();
   if (!name) return toast('Product name is required', 'red');
   const price = parseFloat(document.getElementById('p-price').value);
@@ -1288,8 +1628,61 @@ function saveProduct() {
     expiry: document.getElementById('p-expiry').value,
     manufacturer: document.getElementById('p-manufacturer').value,
     unit: document.getElementById('p-unit').value,
-  };
 
+    // Variants / Classification
+    variants: getVariantsFromUI(),
+  };
+  if (product.variants.length) {
+    product.stock = product.variants.reduce((sum, v) => sum + (Number(v.stock) || 0), 0);
+  }
+
+  // If Supabase enabled, persist via Supabase.
+  if (isSupabaseEnabled()) {
+    const productPayload = {
+      name: product.name,
+      sku: product.sku,
+      category: product.category,
+      mrp: product.mrp,
+      price: product.price,
+      purchase: product.purchase,
+      stock: product.stock,
+      gst: product.gst,
+      hsn: product.hsn,
+      expiry: product.expiry || null,
+      manufacturer: product.manufacturer,
+      unit: product.unit,
+      variants: product.variants || [],
+    };
+
+    // upsert approach: use id if editing
+    if (editId) {
+      const { error } = await supabaseClient.from('products').update(productPayload).eq('id', editId);
+
+      if (error) return toast(formatSupabaseProductError(error), 'red');
+    } else {
+      const { error } = await supabaseClient.from('products').insert({
+        ...productPayload,
+        user_id: sessionUserId,
+      });
+      if (error) return toast(formatSupabaseProductError(error), 'red');
+    }
+
+    closeModal('product-modal');
+    await fetchAllFromSupabase();
+    // Ensure product variants exist in memory (schema cache issue can happen if column was just added)
+    data.products = (data.products || []).map(p => ({
+      ...p,
+      variants: p.variants || [],
+    }));
+
+    renderProductsTable();
+    updateExpiryBadge();
+    populateProductDropdowns();
+    toast((editId ? 'Product updated' : 'Product added') + ' successfully', 'green');
+    return;
+  }
+
+  // localStorage fallback
   if (editId) {
     const idx = data.products.findIndex(p => p.id === editId);
     data.products[idx] = product;
@@ -1304,6 +1697,7 @@ function saveProduct() {
   populateProductDropdowns();
   toast((editId ? 'Product updated' : 'Product added') + ' successfully', 'green');
 }
+
 
 function deleteProduct(id) {
   if (!confirm('Delete this product?')) return;
@@ -1455,13 +1849,24 @@ function addSaleItem() {
   if (!pid || !qty) return toast('Select a product and quantity', 'amber');
   const prod = data.products.find(p => p.id === pid);
   if (!prod) return;
-  if (qty > prod.stock) return toast(`Only ${prod.stock} ${prod.unit} available`, 'red');
 
-  const existing = saleItems.find(i => i.pid === pid);
+  const vidSel = document.getElementById('s-item-variant-select')?.value || '';
+  const variantIndex = vidSel === '' ? null : parseInt(vidSel);
+
+  const variants = (prod.variants || []);
+  const variant = variantIndex === null ? null : variants[variantIndex];
+  const vStock = variant ? (Number(variant.stock) || 0) : prod.stock;
+  if (qty > vStock) return toast(`Only ${vStock} ${prod.unit} available`, 'red');
+
+  const linePrice = variant ? Number(variant.price) || prod.price : prod.price;
+  const lineName = variant ? `${prod.name} — ${variant.name}` : prod.name;
+
+  const existing = saleItems.find(i => i.pid === pid && ((i.variantIndex ?? null) === (variantIndex ?? null)));
   if (existing) existing.qty += qty;
-  else saleItems.push({ pid, qty, price: prod.price, name: prod.name });
+  else saleItems.push({ pid, variantIndex: variantIndex, qty, price: linePrice, name: lineName });
 
   document.getElementById('s-item-select').value = '';
+  populateSaleVariantDropdown();
   document.getElementById('s-item-qty').value = '1';
   renderSaleItems();
 }
@@ -1482,8 +1887,10 @@ function renderSaleItems() {
   document.getElementById('s-total').textContent = '₹' + fmt(total);
 }
 
-function saveSale() {
+async function saveSale() {
+
   if (saleItems.length === 0) return toast('Add at least one product', 'red');
+
   const subtotal = saleItems.reduce((t,i) => t + i.qty*i.price, 0);
   let gstTotal = 0;
   saleItems.forEach(item => {
@@ -1498,7 +1905,7 @@ function saveSale() {
   const sale = {
     id: 's' + Date.now(),
     invNo, customerId,
-    items: saleItems.map(i => ({pid:i.pid, qty:i.qty, price:i.price})),
+    items: saleItems.map(i => ({pid:i.pid, variantIndex: (i.variantIndex ?? null), qty:i.qty, price:i.price})),
     subtotal: Math.round(subtotal*100)/100,
     gst: Math.round(gstTotal*100)/100,
     total: Math.round((subtotal+gstTotal)*100)/100,
@@ -1506,18 +1913,51 @@ function saveSale() {
     payment: 'Cash',
   };
 
-  // Update stock
-  saleItems.forEach(item => {
-    const idx = data.products.findIndex(p => p.id === item.pid);
-    if (idx !== -1) data.products[idx].stock -= item.qty;
-  });
-
   // Update customer purchases
   if (customerId) {
     const cidx = data.customers.findIndex(c => c.id === customerId);
     if (cidx !== -1) saleItems.forEach(i => { if (!data.customers[cidx].purchases.includes(i.pid)) data.customers[cidx].purchases.push(i.pid); });
   }
 
+  // If Supabase enabled, use Edge Function for atomic stock decrement + create rows.
+  if (isSupabaseEnabled()) {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/${EDGE_FUNCTION_NAME}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': await getSupabaseAuthHeader(),
+        },
+        body: JSON.stringify({
+          customerId: customerId || null,
+          invNo,
+          saleDate: document.getElementById('s-date').value,
+          paymentMode: 'Cash',
+          items: saleItems.map(i => ({ pid: i.pid, variantIndex: (i.variantIndex ?? null), qty: i.qty, price: i.price })),
+          bill: { format: 'Standard GST Invoice', billGstin: document.getElementById('bill-gstin')?.value || null },
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || 'Edge function failed');
+
+      closeModal('sale-modal');
+      saleItems = [];
+      await fetchAllFromSupabase();
+      renderSalesTable();
+      renderProductsTable();
+      renderBillHistory();
+      updateExpiryBadge();
+      toast(`Sale recorded! Invoice ${invNo}`, 'green');
+      return;
+    } catch (e) {
+      toast(e?.message || 'Sale failed', 'red');
+      return;
+    }
+  }
+
+  // localStorage fallback
+  saleItems.forEach(item => decrementProductStock(item.pid, item.qty, item.variantIndex));
   data.sales.push(sale);
   data.bills.push({ invNo, customerId, amount: sale.total, date: sale.date, format: 'Standard GST Invoice' });
   saveData();
@@ -1528,6 +1968,7 @@ function saveSale() {
   updateExpiryBadge();
   toast(`Sale recorded! Invoice ${invNo}`, 'green');
 }
+
 
 // =========================================================
 // BILLING
@@ -1555,11 +1996,23 @@ function addBillItem() {
   const prod = data.products.find(p => p.id === pid);
   if (!prod) return;
 
-  const existing = billItems.find(i => i.pid === pid);
+  const vidSel = document.getElementById('bill-item-variant-select')?.value || '';
+  const variantIndex = vidSel === '' ? null : parseInt(vidSel);
+
+  const variants = (prod.variants || []);
+  const variant = variantIndex === null ? null : variants[variantIndex];
+  const vStock = variant ? (Number(variant.stock) || 0) : prod.stock;
+  if (qty > vStock) return toast(`Only ${vStock} ${prod.unit} available`, 'red');
+
+  const linePrice = variant ? Number(variant.price) || prod.price : prod.price;
+  const lineName = variant ? `${prod.name} — ${variant.name}` : prod.name;
+
+  const existing = billItems.find(i => i.pid === pid && ((i.variantIndex ?? null) === (variantIndex ?? null)));
   if (existing) existing.qty += qty;
-  else billItems.push({ pid, qty, name: prod.name, price: prod.price, gst: prod.gst, hsn: prod.hsn || '' });
+  else billItems.push({ pid, variantIndex: variantIndex, qty, name: lineName, price: linePrice, gst: prod.gst, hsn: prod.hsn || '' });
 
   document.getElementById('bill-item-select').value = '';
+  populateBillVariantDropdown();
   document.getElementById('bill-item-qty').value = '1';
   renderBillItems();
 }
@@ -1594,8 +2047,9 @@ function autofillCustomer() {
   if (cust && cust.gstin) document.getElementById('bill-gstin').value = cust.gstin;
 }
 
-function generateBill() {
+async function generateBill() {
   if (billItems.length === 0) return toast('Add at least one item', 'amber');
+
 
   const cid = document.getElementById('bill-customer').value;
   const cust = cid ? data.customers.find(c => c.id === cid) : null;
@@ -1614,11 +2068,54 @@ function generateBill() {
   const cgst = gstTotal / 2;
   const grand = subtotal + gstTotal;
 
+  // If Supabase enabled, use Edge Function for atomic stock decrement + create rows.
+  if (isSupabaseEnabled()) {
+    try {
+      const customerId = cid || null;
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/${EDGE_FUNCTION_NAME}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': await getSupabaseAuthHeader(),
+        },
+        body: JSON.stringify({
+          customerId,
+          invNo,
+          saleDate: date,
+          paymentMode: payment,
+          items: billItems.map(i => ({ pid: i.pid, variantIndex: (i.variantIndex ?? null), qty: i.qty, price: i.price })),
+          bill: {
+            format: (format === 'gst') ? 'Standard GST Invoice' : (format === 'retail' ? 'Retail Invoice' : (format === 'b2b' ? 'B2B Tax Invoice' : 'Proforma Invoice')),
+            billGstin: gstin || null,
+          }
+        })
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || 'Edge function failed');
+
+      // Render preview
+      const bill = getBillHTML(format, invNo, date, cust, gstin, payment, subtotal, cgst, grand);
+      document.getElementById('bill-preview-area').innerHTML = bill;
+      toast('Bill generated & saved!', 'green');
+
+      // Refresh from DB
+      saleItems = [];
+      await fetchAllFromSupabase();
+      renderSalesTable();
+      renderBillHistory();
+      renderProductsTable();
+      updateExpiryBadge();
+      return;
+    } catch (e) {
+      toast(e?.message || 'Bill failed', 'red');
+      return;
+    }
+  }
+
+  // localStorage fallback (previous behavior)
   // 1) Update stock based on the bill
-  billItems.forEach(item => {
-    const idx = data.products.findIndex(p => p.id === item.pid);
-    if (idx !== -1) data.products[idx].stock -= item.qty;
-  });
+  billItems.forEach(item => decrementProductStock(item.pid, item.qty, item.variantIndex));
 
   // 2) Ensure a corresponding sale is created (so bill appears in history)
   //    This keeps billing history in sync with sales.
@@ -1642,7 +2139,7 @@ function generateBill() {
     id: saleId,
     invNo,
     customerId,
-    items: billItems.map(i => ({ pid: i.pid, qty: i.qty, price: i.price })),
+    items: billItems.map(i => ({ pid: i.pid, variantIndex: (i.variantIndex ?? null), qty: i.qty, price: i.price })),
     subtotal: Math.round(subtotal * 100) / 100,
     gst: Math.round(gstTotal * 100) / 100,
     total: Math.round(grand * 100) / 100,
@@ -1671,6 +2168,7 @@ function generateBill() {
   renderBillHistory();
   updateExpiryBadge();
 }
+
 
 function getBillHTML(format, invNo, date, cust, gstin, payment, subtotal, cgst, grand) {
   const b = data.businessInfo;
@@ -2171,6 +2669,189 @@ function toast(msg, type = 'green') {
   document.getElementById('toast-container').appendChild(el);
   setTimeout(() => el.remove(), 3500);
 }
+
+function formatSupabaseProductError(error) {
+  const msg = error?.message || String(error || 'Product save failed');
+  if (msg.includes('variants') || msg.includes('schema cache')) {
+    return 'Product variants column is missing in Supabase. Run the updated supabase-schema.sql, then reload the app.';
+  }
+  if (msg.includes('invalid input syntax for type uuid')) {
+    return 'Supabase rejected a product id. Reload and try adding the product again.';
+  }
+  if (msg.includes('row-level security policy')) {
+    return 'Supabase rejected the product owner. Check that anonymous auth is enabled, then reload and try again.';
+  }
+  return msg;
+}
+
+function decrementProductStock(pid, qty, variantIndex = null) {
+  const idx = data.products.findIndex(p => p.id === pid);
+  if (idx === -1) return;
+
+  const product = data.products[idx];
+  if (variantIndex !== null && Array.isArray(product.variants) && product.variants[variantIndex]) {
+    product.variants[variantIndex].stock = Math.max(0, (Number(product.variants[variantIndex].stock) || 0) - qty);
+    product.stock = product.variants.reduce((sum, v) => sum + (Number(v.stock) || 0), 0);
+    return;
+  }
+
+  product.stock = Math.max(0, (Number(product.stock) || 0) - qty);
+}
+
+// =========================================================
+// Product Variants (Classification) UI helpers
+// =========================================================
+function populateSaleVariantDropdown() {
+  const pid = document.getElementById('s-item-select')?.value || '';
+  const variantSel = document.getElementById('s-item-variant-select');
+  if (!variantSel) return;
+
+  if (!pid) {
+    variantSel.innerHTML = '<option value="">Variant (optional)</option>';
+    return;
+  }
+
+  const p = data.products.find(x => x.id === pid);
+  const variants = (p?.variants || []);
+
+  if (!variants.length) {
+    variantSel.innerHTML = '<option value="">(Base product)</option>';
+    return;
+  }
+
+  variantSel.innerHTML = '<option value="">(Default)</option>' + variants.map((v, idx) => {
+    const label = v?.name || `Variant ${idx + 1}`;
+    return `<option value="${idx}">${label} — Stock: ${v?.stock ?? 0} — ₹${v?.price ?? p.price}</option>`;
+  }).join('');
+}
+
+function populateBillVariantDropdown() {
+  const pid = document.getElementById('bill-item-select')?.value || '';
+  const variantSel = document.getElementById('bill-item-variant-select');
+  if (!variantSel) return;
+
+  if (!pid) {
+    variantSel.innerHTML = '<option value="">Variant (optional)</option>';
+    return;
+  }
+
+  const p = data.products.find(x => x.id === pid);
+  const variants = (p?.variants || []);
+
+  if (!variants.length) {
+    variantSel.innerHTML = '<option value="">(Base product)</option>';
+    return;
+  }
+
+  variantSel.innerHTML = '<option value="">(Default)</option>' + variants.map((v, idx) => {
+    const label = v?.name || `Variant ${idx + 1}`;
+    return `<option value="${idx}">${label} — Stock: ${v?.stock ?? 0} — ₹${v?.price ?? p.price}</option>`;
+  }).join('');
+}
+
+// =========================================================
+function addVariantRow() {
+
+  const nameEl = document.getElementById('v-name');
+  const stockEl = document.getElementById('v-stock');
+  const priceEl = document.getElementById('v-price');
+  const tbody = document.getElementById('variants-body');
+  if (!tbody || !nameEl || !stockEl || !priceEl) return;
+
+  const vName = nameEl.value.trim();
+  const vStock = parseInt(stockEl.value);
+  const vPrice = parseFloat(priceEl.value);
+
+  if (!vName) return toast('Variant name is required', 'red');
+  if (Number.isNaN(vStock) || vStock < 0) return toast('Variant stock must be 0 or more', 'red');
+  if (Number.isNaN(vPrice) || vPrice <= 0) return toast('Variant selling price is required', 'red');
+
+  const rowId = 'vrow-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+
+  const tr = document.createElement('tr');
+  tr.setAttribute('data-rowid', rowId);
+  tr.innerHTML = `
+    <td style="min-width:260px;">
+      <input type="text" class="variant-name" value="${escapeHtmlAttr(vName)}" style="width:100%;" />
+    </td>
+    <td style="width:120px;">
+      <input type="number" class="variant-stock" value="${vStock}" min="0" style="width:100%;" />
+    </td>
+    <td style="width:200px;">
+      <input type="number" class="variant-price" value="${vPrice}" step="0.01" min="0" style="width:100%;" />
+    </td>
+    <td style="width:40px;">
+      <button type="button" class="btn btn-danger btn-sm" style="padding:6px 10px;" onclick="removeVariantRow('${rowId}')">Del</button>
+    </td>
+  `;
+
+  tbody.appendChild(tr);
+
+  nameEl.value = '';
+  stockEl.value = '';
+  priceEl.value = '';
+}
+
+function setVariantsUI(variants = []) {
+  const tbody = document.getElementById('variants-body');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  variants.forEach(v => {
+    const rowId = 'vrow-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+    const tr = document.createElement('tr');
+    tr.setAttribute('data-rowid', rowId);
+    tr.innerHTML = `
+      <td style="min-width:260px;">
+        <input type="text" class="variant-name" value="${escapeHtmlAttr(v?.name || '')}" style="width:100%;" />
+      </td>
+      <td style="width:120px;">
+        <input type="number" class="variant-stock" value="${Number(v?.stock) || 0}" min="0" style="width:100%;" />
+      </td>
+      <td style="width:200px;">
+        <input type="number" class="variant-price" value="${Number(v?.price) || 0}" step="0.01" min="0" style="width:100%;" />
+      </td>
+      <td style="width:40px;">
+        <button type="button" class="btn btn-danger btn-sm" style="padding:6px 10px;" onclick="removeVariantRow('${rowId}')">Del</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function removeVariantRow(rowId) {
+  const el = document.querySelector(`#variants-body tr[data-rowid="${CSS.escape(rowId)}"]`);
+  if (el) el.remove();
+}
+
+function clearVariants(showToast = true) {
+  const tbody = document.getElementById('variants-body');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  if (showToast) toast('Variants cleared', 'amber');
+}
+
+function getVariantsFromUI() {
+  const tbody = document.getElementById('variants-body');
+  if (!tbody) return [];
+  const rows = [...tbody.querySelectorAll('tr')];
+  return rows.map(r => {
+    const name = (r.querySelector('.variant-name')?.value || '').trim();
+    const stock = parseInt(r.querySelector('.variant-stock')?.value);
+    const price = parseFloat(r.querySelector('.variant-price')?.value);
+    return { name, stock: Number.isNaN(stock) ? 0 : stock, price: Number.isNaN(price) ? 0 : price };
+  }).filter(v => v.name && v.stock >= 0 && v.price > 0);
+}
+
+function escapeHtmlAttr(str) {
+  return String(str)
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
+
+
 
 // Close modals on overlay click
 document.querySelectorAll('.modal-overlay').forEach(el => {
