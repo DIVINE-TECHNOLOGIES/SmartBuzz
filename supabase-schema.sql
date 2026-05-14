@@ -38,6 +38,9 @@ create table if not exists public.business_profiles (
   updated_at timestamptz not null default now()
 );
 
+create unique index if not exists business_profiles_user_id_unique_idx
+on public.business_profiles(user_id);
+
 -- Drop existing trigger safely
 drop trigger if exists set_business_profiles_user_id
 on public.business_profiles;
@@ -92,6 +95,31 @@ on public.products;
 
 create trigger set_products_user_id
 before insert on public.products
+for each row
+execute function public.set_user_id();
+
+-- =========================
+-- stock_entries
+-- =========================
+create table if not exists public.stock_entries (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null,
+  product_id uuid not null references public.products(id) on delete cascade,
+  variant_index integer,
+  variant_name text,
+  quantity integer not null check (quantity > 0),
+  source text not null default '',
+  received_date date not null,
+  notes text,
+  added_by text,
+  created_at timestamptz not null default now()
+);
+
+drop trigger if exists set_stock_entries_user_id
+on public.stock_entries;
+
+create trigger set_stock_entries_user_id
+before insert on public.stock_entries
 for each row
 execute function public.set_user_id();
 
@@ -208,6 +236,7 @@ create table if not exists public.invoice_counters (
 -- =========================
 alter table public.business_profiles enable row level security;
 alter table public.products enable row level security;
+alter table public.stock_entries enable row level security;
 alter table public.customers enable row level security;
 alter table public.sales enable row level security;
 alter table public.bills enable row level security;
@@ -227,6 +256,12 @@ drop policy if exists "products_read_own" on public.products;
 drop policy if exists "products_insert_own" on public.products;
 drop policy if exists "products_update_own" on public.products;
 drop policy if exists "products_delete_own" on public.products;
+
+-- stock_entries
+drop policy if exists "stock_entries_read_own" on public.stock_entries;
+drop policy if exists "stock_entries_insert_own" on public.stock_entries;
+drop policy if exists "stock_entries_update_own" on public.stock_entries;
+drop policy if exists "stock_entries_delete_own" on public.stock_entries;
 
 -- customers
 drop policy if exists "customers_read_own" on public.customers;
@@ -291,6 +326,30 @@ with check (user_id = auth.uid());
 
 create policy "products_delete_own"
 on public.products
+for delete
+using (user_id = auth.uid());
+
+-- =========================
+-- stock_entries policies
+-- =========================
+create policy "stock_entries_read_own"
+on public.stock_entries
+for select
+using (user_id = auth.uid());
+
+create policy "stock_entries_insert_own"
+on public.stock_entries
+for insert
+with check (user_id = auth.uid());
+
+create policy "stock_entries_update_own"
+on public.stock_entries
+for update
+using (user_id = auth.uid())
+with check (user_id = auth.uid());
+
+create policy "stock_entries_delete_own"
+on public.stock_entries
 for delete
 using (user_id = auth.uid());
 
@@ -392,6 +451,12 @@ on public.products(user_id, stock);
 
 create index if not exists products_user_expiry_idx
 on public.products(user_id, expiry);
+
+create index if not exists stock_entries_user_date_idx
+on public.stock_entries(user_id, received_date);
+
+create index if not exists stock_entries_product_idx
+on public.stock_entries(product_id);
 
 create index if not exists customers_user_phone_idx
 on public.customers(user_id, phone);

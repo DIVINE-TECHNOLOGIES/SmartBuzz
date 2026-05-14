@@ -63,6 +63,53 @@
     padding: 28px;
   }
 
+  .auth-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    z-index: 3000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  .auth-card {
+    width: 420px;
+    max-width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius);
+    padding: 28px;
+  }
+
+  .auth-mode-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    background: var(--surface2);
+    border-radius: var(--radius-sm);
+    padding: 4px;
+    margin: 18px 0;
+  }
+
+  .auth-mode {
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--muted);
+    padding: 9px 10px;
+    cursor: pointer;
+    font-family: 'DM Sans', sans-serif;
+  }
+
+  .auth-mode.active {
+    background: var(--surface);
+    color: var(--text);
+  }
+
+  .role-hidden { display: none !important; }
+
   .welcome-favicon {
     width: 72px;
     height: 72px;
@@ -475,16 +522,53 @@
   .report-preview td { padding: 10px 8px; border-bottom: 1px solid #dee2e6; }
   .report-preview .summary-box { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 24px; }
   .report-preview .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+  .stock-batch-table input, .stock-batch-table select { min-width: 120px; }
+  .file-input-hidden { display: none; }
 
   @media print {
-    .sidebar, .topbar, .btn, .wa-btn, button, .filters { display: none !important; }
-    .bill-preview, .report-preview { box-shadow: none; margin: 0; break-inside: avoid; }
+    body * { visibility: hidden !important; }
+    .bill-preview, .bill-preview *, .report-preview, .report-preview * { visibility: visible !important; }
+    .bill-preview, .report-preview {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      box-shadow: none;
+      margin: 0;
+      break-inside: avoid;
+    }
     .main { margin-left: 0; }
     @page { margin: 1in; }
   }
 </style>
 </head>
 <body>
+
+<div class="auth-overlay" id="auth-overlay">
+  <div class="auth-card">
+    <img class="welcome-favicon" src="Images/Favicon.ico" alt="SmartBuzz">
+    <div style="text-align:center;font-family:'Playfair Display',serif;font-size:22px;font-weight:700;">SmartBuzz Pro</div>
+    <div style="text-align:center;color:var(--muted);font-size:12px;margin-top:4px;">Sign in to continue</div>
+
+    <div class="auth-mode-row">
+      <button class="auth-mode active" type="button" id="login-mode-btn" onclick="setAuthMode('login')">Login</button>
+      <button class="auth-mode" type="button" id="register-mode-btn" onclick="setAuthMode('register')">Register</button>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div class="form-group">
+        <label class="form-label">Username</label>
+        <input type="text" id="auth-username" autocomplete="username" placeholder="Username">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input type="password" id="auth-password" autocomplete="current-password" placeholder="Password">
+      </div>
+      <button class="btn btn-primary" id="auth-submit" onclick="handleAuthSubmit()" style="width:100%;justify-content:center;">Login</button>
+      <div class="text-muted text-sm" id="auth-hint" style="text-align:center;">Owner login: MOHD</div>
+    </div>
+  </div>
+</div>
 
 <div class="app">
 
@@ -506,13 +590,16 @@
     </div>
 
     <div class="nav-section">Core</div>
-    <div class="nav-item active" onclick="navigate('dashboard')">
+    <div class="nav-item active admin-only" onclick="navigate('dashboard')">
       <span class="nav-icon">⬡</span> Dashboard
     </div>
-    <div class="nav-item" onclick="navigate('products')">
+    <div class="nav-item admin-only" onclick="navigate('products')">
       <span class="nav-icon">📦</span> Products
     </div>
-    <div class="nav-item" onclick="navigate('sales')">
+    <div class="nav-item" onclick="navigate('stock')">
+      <span class="nav-icon">▣</span> Add Stock
+    </div>
+    <div class="nav-item admin-only" onclick="navigate('sales')">
       <span class="nav-icon">◈</span> Sales
     </div>
 
@@ -520,21 +607,26 @@
     <div class="nav-item" onclick="navigate('billing')">
       <span class="nav-icon">◎</span> GST Bills
     </div>
-    <div class="nav-item" onclick="navigate('customers')">
+    <div class="nav-item admin-only" onclick="navigate('customers')">
       <span class="nav-icon">◉</span> Customers
     </div>
     <!-- NEW: Sales Report for CA -->
-    <div class="nav-item" onclick="navigate('report')">
+    <div class="nav-item admin-only" onclick="navigate('report')">
       <span class="nav-icon">📊</span> Sales Report
     </div>
 
-    <div class="nav-section">Alerts</div>
-    <div class="nav-item" onclick="navigate('expiry')">
+    <div class="nav-section admin-only">Alerts</div>
+    <div class="nav-item admin-only" onclick="navigate('expiry')">
       <span class="nav-icon">⚠</span> Expiry Tracker
       <span class="badge badge-red" style="margin-left:auto;padding:2px 7px;font-size:10px;" id="expiry-count">0</span>
     </div>
-    <div class="nav-item" onclick="navigate('whatsapp')">
+    <div class="nav-item admin-only" onclick="navigate('whatsapp')">
       <span class="nav-icon">✉</span> WhatsApp Alerts
+    </div>
+
+    <div class="nav-section admin-only">Owner</div>
+    <div class="nav-item admin-only" onclick="navigate('admin')">
+      <span class="nav-icon">⚙</span> Admin
     </div>
   </nav>
 
@@ -548,8 +640,10 @@
         <p id="page-sub">Overview of your business today</p>
       </div>
       <div class="topbar-actions">
+        <span class="badge badge-blue" style="font-size:12px;padding:5px 12px;" id="session-badge"></span>
         <div class="badge badge-accent" style="font-size:12px;padding:5px 12px;" id="today-date"></div>
         <button class="btn btn-outline btn-sm" onclick="navigate('billing'); openNewBillModal()">+ New Bill</button>
+        <button class="btn btn-outline btn-sm" onclick="logout()">Logout</button>
       </div>
     </div>
 
@@ -600,7 +694,11 @@
             <option value="">All Categories</option>
           </select>
         </div>
-        <button class="btn btn-primary" onclick="openProductModal()">+ Add Product</button>
+        <div class="flex gap-2">
+          <input class="file-input-hidden" type="file" id="product-import-file" accept=".xlsx,.xls,.csv" onchange="handleProductImport(event)">
+          <button class="btn btn-outline" onclick="document.getElementById('product-import-file').click()">Upload Excel</button>
+          <button class="btn btn-primary" onclick="openProductModal()">+ Add Product</button>
+        </div>
       </div>
 
       <div class="card" style="padding:0;overflow:hidden;">
@@ -639,19 +737,40 @@
       </div>
     </div>
 
+    <!-- ADD STOCK -->
+    <div class="page" id="page-stock">
+      <div class="flex items-center justify-between mb-5">
+        <div>
+          <h3 style="font-size:18px;font-weight:600;">Add Stock</h3>
+          <p class="text-muted text-sm mt-3">Increase quantity only for products already in the system.</p>
+        </div>
+        <button class="btn btn-primary" onclick="openStockModal()">+ Add Received Stock</button>
+      </div>
+
+      <div class="card" style="padding:0;overflow:hidden;">
+        <table>
+          <thead><tr>
+            <th>Date</th><th>Product</th><th>Variant</th><th>Qty Added</th><th>From / Supplier</th><th>Added By</th>
+          </tr></thead>
+          <tbody id="stock-history-table"></tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- GST BILLS -->
     <div class="page" id="page-billing">
       <div class="flex items-center justify-between mb-5">
         <div class="tabs">
           <div class="tab active" onclick="setBillTab('create')">Create Bill</div>
-          <div class="tab" onclick="setBillTab('history')">Bill History</div>
+          <div class="tab admin-only" onclick="setBillTab('history')">Bill History</div>
         </div>
         <div class="flex gap-2">
-          <select id="bill-format" style="width:180px;">
+          <select id="bill-format" class="admin-only" style="width:180px;">
             <option value="gst">Standard GST Invoice</option>
             <option value="retail">Retail Invoice</option>
             <option value="b2b">B2B Tax Invoice</option>
             <option value="proforma">Proforma Invoice</option>
+            <option value="challan">Delivery Challan (Prices Only)</option>
           </select>
         </div>
       </div>
@@ -662,6 +781,19 @@
           <div class="card">
             <h3 style="font-size:14px;font-weight:600;margin-bottom:16px;">Bill Details</h3>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+              <div class="form-group" style="grid-column:span 2;">
+                <label class="form-label">Invoice Header / Company Details</label>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;background:var(--surface2);border:1px solid var(--border2);border-radius:8px;padding:12px;">
+                  <input type="text" id="inv-business-name" placeholder="Company name">
+                  <input type="text" id="inv-business-gstin" placeholder="GSTIN">
+                  <input type="text" id="inv-business-phone" placeholder="Phone">
+                  <input type="email" id="inv-business-email" placeholder="Email">
+                  <input type="text" id="inv-business-state" placeholder="State">
+                  <input type="text" id="inv-business-state-code" placeholder="State code">
+                  <textarea id="inv-business-address" rows="2" placeholder="Address" style="grid-column:span 2;"></textarea>
+                </div>
+                <div class="text-muted text-sm mt-3">These details are saved as the default for future bills when the bill is generated.</div>
+              </div>
               <div class="form-group">
                 <label class="form-label">Invoice No.</label>
                 <input type="text" id="bill-inv-no" value="" readonly style="opacity:0.7;">
@@ -670,13 +802,13 @@
                 <label class="form-label">Date</label>
                 <input type="date" id="bill-date">
               </div>
-              <div class="form-group" style="grid-column:span 2;">
+              <div class="form-group admin-only" style="grid-column:span 2;">
                 <label class="form-label">Customer</label>
                 <select id="bill-customer" onchange="autofillCustomer()">
                   <option value="">Select Customer</option>
                 </select>
               </div>
-              <div class="form-group">
+              <div class="form-group admin-only">
                 <label class="form-label">Customer GSTIN</label>
                 <input type="text" id="bill-gstin" placeholder="Optional">
               </div>
@@ -838,7 +970,32 @@
       </div>
     </div>
 
+    <!-- ADMIN -->
+    <div class="page" id="page-admin">
+      <div class="grid-3 mb-6">
+        <div class="stat-card">
+          <div class="stat-label">Registered Users</div>
+          <div class="stat-value" id="admin-user-count">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Stock Entries</div>
+          <div class="stat-value" id="admin-stock-count">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Role</div>
+          <div class="stat-value" style="font-size:22px;">Owner</div>
+        </div>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden;">
+        <table>
+          <thead><tr><th>Username</th><th>Role</th><th>Registered</th></tr></thead>
+          <tbody id="admin-users-table"></tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- WHATSAPP -->
+    <div class="page" id="page-whatsapp">
       <div class="grid-2 gap-4 mb-5">
         <!-- Send Alerts -->
         <div class="card">
@@ -1080,40 +1237,91 @@
   </div>
 </div>
 
+<!-- Add Stock Modal -->
+<div class="modal-overlay" id="stock-modal">
+  <div class="modal modal-lg">
+    <button class="close-btn" onclick="closeModal('stock-modal')">✕</button>
+    <h3>Add Received Stock</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+      <div class="form-group">
+        <label class="form-label">Date Received *</label>
+        <input type="date" id="stock-date">
+      </div>
+      <div class="form-group">
+        <label class="form-label">From / Supplier *</label>
+        <input type="text" id="stock-source" placeholder="Supplier, vendor, or person name">
+      </div>
+      <div class="form-group" style="grid-column:span 2;">
+        <label class="form-label">Notes</label>
+        <textarea id="stock-notes" rows="2" placeholder="Optional"></textarea>
+      </div>
+    </div>
+    <div style="overflow-x:auto;">
+      <table class="stock-batch-table" style="font-size:12px;">
+        <thead>
+          <tr><th>Product</th><th>Variant</th><th>Qty Received</th><th></th></tr>
+        </thead>
+        <tbody id="stock-batch-body"></tbody>
+      </table>
+    </div>
+    <div class="mt-3">
+      <button class="btn btn-outline btn-sm" type="button" onclick="addStockBatchRow()">+ Add Another Product</button>
+    </div>
+    <div class="mt-4 flex gap-2" style="justify-content:flex-end;">
+      <button class="btn btn-outline" onclick="closeModal('stock-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveStockEntry()">Add Stock Batch</button>
+    </div>
+  </div>
+</div>
+
 <!-- Toast Container -->
 <div class="toast-container" id="toast-container"></div>
 
+
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script>
+  function escapeHtml(text) {
+  const map = { '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#039;' };
+  return String(text).replace(/[&<>"']/g, m => map[m]);
+}
 // (Supabase CDN is loaded separately in `window.supabase`)
 
 // =========================================================
 // DATA STORE
 // =========================================================
+const DEFAULT_BUSINESS_INFO = {
+  name: "SmartBuzz Pro",
+  gstin: "",
+  address: "",
+  phone: "",
+  email: "",
+  state: "",
+  stateCode: ""
+};
+
 let data = {
 
   products: [],
   customers: [],
   sales: [],
   bills: [],
+  stockEntries: [],
   waLog: [],
   invoiceCounter: 1,
   classifications: [],
-  businessInfo: {
-    name: "",
-    gstin: "",
-    address: "",
-    phone: "",
-    email: "",
-    state: "",
-    stateCode: ""
-  }
+  businessProfileId: null,
+  businessInfo: { ...DEFAULT_BUSINESS_INFO }
 };
 
 let billItems = [];
 let saleItems = [];
 let currentExpiryTab = 'critical';
 let currentBillTab = 'create';
+let authMode = 'login';
+let currentUser = null;
+const ADMIN_USERNAME = 'MOHD';
+const ADMIN_PASSWORD = 'Ayan@2711';
 
 // =========================================================
 // INIT
@@ -1141,6 +1349,7 @@ function showPageLoading(message = 'Loading…') {
 
 function init() {
   const w = showWelcome(700);
+  restoreCurrentUser();
 
   // Load supabase session (if configured), then load data.
   // If Supabase is not configured yet, it falls back to localStorage.
@@ -1168,9 +1377,16 @@ function afterInit() {
   if (billDateEl) billDateEl.value = today();
   const saleDateEl = document.getElementById('s-date');
   if (saleDateEl) saleDateEl.value = today();
+  data.businessInfo = normalizeBusinessInfo(data.businessInfo);
+  syncInvoiceHeaderFields();
+  refreshNextInvoiceNumber();
 
   renderAll();
   updateExpiryBadge();
+  applyRoleAccess();
+  const overlay = document.getElementById('auth-overlay');
+  if (overlay) overlay.style.display = currentUser ? 'none' : 'flex';
+  if (currentUser && !isAdmin()) navigate('stock');
 }
 
 function today() {
@@ -1179,6 +1395,105 @@ function today() {
 
 function seedData() {
   // Sample/demo data intentionally removed.
+}
+
+// =========================================================
+// APP LOGIN / ROLES
+// =========================================================
+function getRegisteredUsers() {
+  try {
+    return JSON.parse(localStorage.getItem('smartbuzz-users') || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function saveRegisteredUsers(users) {
+  localStorage.setItem('smartbuzz-users', JSON.stringify(users || []));
+}
+
+function setAuthMode(mode) {
+  authMode = mode;
+  document.getElementById('login-mode-btn')?.classList.toggle('active', mode === 'login');
+  document.getElementById('register-mode-btn')?.classList.toggle('active', mode === 'register');
+  const submit = document.getElementById('auth-submit');
+  const hint = document.getElementById('auth-hint');
+  if (submit) submit.textContent = mode === 'login' ? 'Login' : 'Register';
+  if (hint) hint.textContent = mode === 'login' ? 'Owner login: MOHD' : 'New registrations are employee/user accounts';
+}
+
+function handleAuthSubmit() {
+  const username = (document.getElementById('auth-username')?.value || '').trim();
+  const password = document.getElementById('auth-password')?.value || '';
+  if (!username || !password) return toast('Username and password are required', 'amber');
+
+  if (authMode === 'login') {
+    if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+      setCurrentUser({ username: ADMIN_USERNAME, role: 'admin', createdAt: 'Owner account' });
+      return;
+    }
+    const user = getRegisteredUsers().find(u => u.username.toLowerCase() === username.toLowerCase() && u.password === password);
+    if (!user) return toast('Invalid username or password', 'red');
+    setCurrentUser({ username: user.username, role: 'employee', createdAt: user.createdAt });
+    return;
+  }
+
+  if (username.toLowerCase() === ADMIN_USERNAME.toLowerCase()) return toast('This username is reserved for the owner', 'red');
+  const users = getRegisteredUsers();
+  if (users.some(u => u.username.toLowerCase() === username.toLowerCase())) return toast('Username already registered', 'red');
+  users.push({ username, password, role: 'employee', createdAt: new Date().toISOString() });
+  saveRegisteredUsers(users);
+  setCurrentUser({ username, role: 'employee', createdAt: users[users.length - 1].createdAt });
+}
+
+function setCurrentUser(user) {
+  currentUser = user;
+  sessionStorage.setItem('smartbuzz-current-user', JSON.stringify(user));
+  applyRoleAccess();
+  const overlay = document.getElementById('auth-overlay');
+  if (overlay) overlay.style.display = 'none';
+  renderAll();
+  navigate(isAdmin() ? 'dashboard' : 'stock');
+}
+
+function restoreCurrentUser() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem('smartbuzz-current-user') || 'null');
+    if (saved?.username && saved?.role) currentUser = saved;
+  } catch {
+    currentUser = null;
+  }
+}
+
+function logout() {
+  currentUser = null;
+  sessionStorage.removeItem('smartbuzz-current-user');
+  const overlay = document.getElementById('auth-overlay');
+  if (overlay) overlay.style.display = 'flex';
+  document.getElementById('auth-password').value = '';
+  setAuthMode('login');
+}
+
+function isAdmin() {
+  return currentUser?.role === 'admin';
+}
+
+function ensureAdmin(action = 'This section') {
+  if (isAdmin()) return true;
+  toast(`${action} is available only to the owner`, 'red');
+  return false;
+}
+
+function applyRoleAccess() {
+  document.querySelectorAll('.admin-only').forEach(el => el.classList.toggle('role-hidden', !isAdmin()));
+  const badge = document.getElementById('session-badge');
+  if (badge) badge.textContent = currentUser ? `${currentUser.username} · ${isAdmin() ? 'Owner' : 'Employee'}` : '';
+  if (!isAdmin()) {
+    const billCustomer = document.getElementById('bill-customer');
+    const billGstin = document.getElementById('bill-gstin');
+    if (billCustomer) billCustomer.value = '';
+    if (billGstin) billGstin.value = '';
+  }
 }
 
 // =========================================================
@@ -1258,11 +1573,12 @@ async function getSupabaseAuthHeader() {
 async function fetchAllFromSupabase() {
   if (!isSupabaseEnabled()) return;
 
-  const [productsRes, customersRes, salesRes, billsRes, bpRes] = await Promise.all([
+  const [productsRes, customersRes, salesRes, billsRes, stockEntriesRes, bpRes] = await Promise.all([
     supabaseClient.from('products').select('*').order('created_at', { ascending: false }),
     supabaseClient.from('customers').select('*').order('created_at', { ascending: false }),
     supabaseClient.from('sales').select('*').order('sale_date', { ascending: false }),
     supabaseClient.from('bills').select('*').order('bill_date', { ascending: false }),
+    supabaseClient.from('stock_entries').select('*').order('received_date', { ascending: false }),
     supabaseClient.from('business_profiles').select('*').maybeSingle(),
   ]);
 
@@ -1270,6 +1586,7 @@ async function fetchAllFromSupabase() {
   if (customersRes.error) throw new Error(customersRes.error.message);
   if (salesRes.error) throw new Error(salesRes.error.message);
   if (billsRes.error) throw new Error(billsRes.error.message);
+  if (stockEntriesRes.error && !String(stockEntriesRes.error.message || '').includes('stock_entries')) throw new Error(stockEntriesRes.error.message);
 
   data.products = (productsRes.data || []).map(p => ({
     id: p.id,
@@ -1319,9 +1636,22 @@ async function fetchAllFromSupabase() {
     format: b.format,
   }));
 
+  data.stockEntries = (stockEntriesRes.data || []).map(e => ({
+    id: e.id,
+    productId: e.product_id,
+    variantIndex: e.variant_index,
+    variantName: e.variant_name,
+    qty: Number(e.quantity),
+    source: e.source,
+    receivedDate: e.received_date,
+    notes: e.notes,
+    addedBy: e.added_by,
+  }));
+
   // Business info
   if (bpRes?.data) {
     const bp = bpRes.data;
+    data.businessProfileId = bp.id;
     data.businessInfo = {
       name: bp.name,
       gstin: bp.gstin,
@@ -1333,11 +1663,12 @@ async function fetchAllFromSupabase() {
     };
   }
 
-  // invoiceCounter is now server-side; keep local UI fallback.
+  data.businessInfo = normalizeBusinessInfo(data.businessInfo);
+  refreshNextInvoiceNumber();
 }
 
 function saveData() {
-  // No-op in Supabase mode.
+  if (!isSupabaseEnabled()) localStorage.setItem('biztrack', JSON.stringify(data));
 }
 
 function loadData() {
@@ -1353,7 +1684,9 @@ function loadData() {
         }
 
         const d = localStorage.getItem('biztrack');
-        if (d) data = JSON.parse(d);
+        if (d) data = { ...data, ...JSON.parse(d) };
+        data.businessInfo = normalizeBusinessInfo(data.businessInfo);
+        refreshNextInvoiceNumber();
       } catch (e) {}
       resolve(true);
     })();
@@ -1368,15 +1701,27 @@ function loadData() {
 const pageTitles = {
   dashboard: ['Dashboard', 'Overview of your business today'],
   products: ['Products', 'Manage your product inventory'],
+  stock: ['Add Stock', 'Record new quantity received for existing products'],
   sales: ['Sales', 'Track and record sales transactions'],
   billing: ['GST Bills', 'Create and manage GST invoices'],
   customers: ['Customers', 'Customer directory and management'],
   expiry: ['Expiry Tracker', 'Monitor product expiry dates'],
   whatsapp: ['WhatsApp Alerts', 'Send expiry notifications via WhatsApp'],
-  report: ['Sales Report', 'Generate PDF of all sales for CA/tax filing']
+  report: ['Sales Report', 'Generate PDF of all sales for CA/tax filing'],
+  admin: ['Admin', 'Owner controls and user segregation']
 };
 
 function navigate(page) {
+  if (!currentUser) {
+    const overlay = document.getElementById('auth-overlay');
+    if (overlay) overlay.style.display = 'flex';
+    return;
+  }
+  const employeePages = ['stock', 'billing'];
+  if (!isAdmin() && !employeePages.includes(page)) {
+    toast('Employees can only add stock and make walk-in GST bills', 'amber');
+    page = 'stock';
+  }
   // Page transitions: show a short loading overlay.
   showPageLoading('Loading ' + (page.charAt(0).toUpperCase() + page.slice(1)) + '…');
 
@@ -1411,12 +1756,14 @@ function navigate(page) {
 function renderPage(page) {
   if (page === 'dashboard') renderDashboard();
   else if (page === 'products') { populateProductDropdowns(); renderProductsTable(); }
+  else if (page === 'stock') { populateProductDropdowns(); renderStockPage(); }
   else if (page === 'sales') { populateSaleDropdowns(); renderSalesTable(); setTimeout(() => { populateSaleVariantDropdown(); }, 0); }
   else if (page === 'billing') { populateBillDropdowns(); renderBillHistory(); setTimeout(() => { populateBillVariantDropdown(); }, 0); }
   else if (page === 'customers') renderCustomersTable();
   else if (page === 'expiry') renderExpiryPage();
   else if (page === 'whatsapp') renderWAPage();
   else if (page === 'report') renderSalesReportPage();
+  else if (page === 'admin') renderAdminPage();
 }
 
 function renderAll() {
@@ -1424,6 +1771,8 @@ function renderAll() {
   populateProductDropdowns();
   populateBillDropdowns();
   populateSaleDropdowns();
+  renderStockPage();
+  renderAdminPage();
 }
 
 // =========================================================
@@ -1573,6 +1922,7 @@ function populateProductDropdowns() {
 }
 
 function openProductModal(id) {
+  if (!ensureAdmin('Product management')) return;
   if (id) {
     const p = data.products.find(x => x.id === id);
     document.getElementById('product-modal-title').textContent = 'Edit Product';
@@ -1607,6 +1957,7 @@ function openProductModal(id) {
 }
 
 async function saveProduct() {
+  if (!ensureAdmin('Product management')) return;
 
   const name = document.getElementById('p-name').value.trim();
   if (!name) return toast('Product name is required', 'red');
@@ -1698,8 +2049,140 @@ async function saveProduct() {
   toast((editId ? 'Product updated' : 'Product added') + ' successfully', 'green');
 }
 
+async function handleProductImport(event) {
+  if (!ensureAdmin('Excel product import')) return;
+  const file = event.target.files?.[0];
+  event.target.value = '';
+  if (!file) return;
+  if (!window.XLSX) return toast('Excel parser failed to load. Check internet connection and reload.', 'red');
+
+  try {
+    const buffer = await file.arrayBuffer();
+    const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+    if (!rows.length) return toast('No product rows found in the sheet', 'amber');
+
+    const products = buildProductsFromImportRows(rows);
+    if (!products.length) return toast('No valid products found. Include at least Product Name and Price columns.', 'amber');
+
+    if (isSupabaseEnabled()) {
+      const payload = products.map(product => ({
+        user_id: sessionUserId,
+        name: product.name,
+        sku: product.sku,
+        category: product.category,
+        mrp: product.mrp,
+        price: product.price,
+        purchase: product.purchase,
+        stock: product.stock,
+        gst: product.gst,
+        hsn: product.hsn,
+        expiry: product.expiry || null,
+        manufacturer: product.manufacturer,
+        unit: product.unit,
+        variants: product.variants || [],
+      }));
+      const { error } = await supabaseClient.from('products').upsert(payload, { onConflict: 'user_id,sku' });
+      if (error) return toast(formatSupabaseProductError(error), 'red');
+      await fetchAllFromSupabase();
+    } else {
+      products.forEach(product => {
+        const existingIdx = data.products.findIndex(p => p.sku === product.sku);
+        if (existingIdx >= 0) data.products[existingIdx] = { ...data.products[existingIdx], ...product, id: data.products[existingIdx].id };
+        else data.products.push(product);
+      });
+      saveData();
+    }
+
+    populateProductDropdowns();
+    renderProductsTable();
+    renderDashboard();
+    updateExpiryBadge();
+    toast(`Imported ${products.length} product${products.length === 1 ? '' : 's'}`, 'green');
+  } catch (e) {
+    console.error(e);
+    toast('Could not import this sheet. Check the column names and file format.', 'red');
+  }
+}
+
+function buildProductsFromImportRows(rows) {
+  const grouped = new Map();
+  rows.forEach((row, idx) => {
+    const name = getImportValue(row, ['product name', 'product', 'name', 'item name', 'item']).trim();
+    const price = toNumber(getImportValue(row, ['selling price', 'sale price', 'price', 'rate']));
+    if (!name || price <= 0) return;
+
+    const sku = getImportValue(row, ['sku', 'barcode', 'code', 'product code']).trim() || makeSku(name, idx);
+    const key = sku.toLowerCase();
+    const variantName = getImportValue(row, ['variant', 'variant name', 'classification', 'size', 'color']).trim();
+    const variantStock = toNumber(getImportValue(row, ['variant stock', 'variant qty', 'variant quantity', 'stock', 'qty', 'quantity']));
+    const variantPrice = toNumber(getImportValue(row, ['variant price', 'variant selling price', 'selling price', 'sale price', 'price', 'rate'])) || price;
+
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        id: 'p' + Date.now() + Math.random().toString(16).slice(2),
+        name,
+        sku,
+        category: getImportValue(row, ['category', 'type']).trim() || 'General',
+        mrp: toNumber(getImportValue(row, ['mrp', 'm.r.p'])) || price,
+        price,
+        purchase: toNumber(getImportValue(row, ['purchase', 'purchase price', 'cost'])),
+        stock: 0,
+        gst: parseInt(getImportValue(row, ['gst', 'gst rate', 'tax', 'tax rate'])) || 12,
+        hsn: getImportValue(row, ['hsn', 'hsn code']).trim(),
+        expiry: normalizeImportDate(getImportValue(row, ['expiry', 'expiry date', 'exp date'])),
+        manufacturer: getImportValue(row, ['manufacturer', 'brand', 'company']).trim(),
+        unit: getImportValue(row, ['unit', 'uom']).trim() || 'pcs',
+        variants: [],
+      });
+    }
+
+    const product = grouped.get(key);
+    if (variantName) {
+      product.variants.push({ name: variantName, stock: variantStock, price: variantPrice });
+    } else {
+      product.stock += variantStock;
+    }
+  });
+
+  return [...grouped.values()].map(product => {
+    if (product.variants.length) {
+      product.stock = product.variants.reduce((sum, v) => sum + (Number(v.stock) || 0), 0);
+    }
+    return product;
+  });
+}
+
+function getImportValue(row, names) {
+  const entries = Object.entries(row);
+  for (const name of names) {
+    const found = entries.find(([key]) => key.trim().toLowerCase() === name);
+    if (found) return String(found[1] ?? '');
+  }
+  return '';
+}
+
+function toNumber(value) {
+  const cleaned = String(value || '').replace(/[₹,\s]/g, '');
+  const n = parseFloat(cleaned);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function makeSku(name, idx) {
+  return 'SKU-' + name.replace(/[^a-z0-9]/gi, '').slice(0, 8).toUpperCase() + '-' + String(idx + 1).padStart(3, '0');
+}
+
+function normalizeImportDate(value) {
+  if (!value) return '';
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().split('T')[0];
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().split('T')[0];
+}
+
 
 function deleteProduct(id) {
+  if (!ensureAdmin('Product deletion')) return;
   if (!confirm('Delete this product?')) return;
   data.products = data.products.filter(p => p.id !== id);
   saveData();
@@ -1746,6 +2229,7 @@ function populateCustomerDropdowns() {
 }
 
 function openCustomerModal(id) {
+  if (!ensureAdmin('Customer management')) return;
   if (id) {
     const c = data.customers.find(x => x.id === id);
     document.getElementById('customer-modal-title').textContent = 'Edit Customer';
@@ -1765,6 +2249,7 @@ function openCustomerModal(id) {
 }
 
 function saveCustomer() {
+  if (!ensureAdmin('Customer management')) return;
   const name = document.getElementById('c-name').value.trim();
   const phone = document.getElementById('c-phone').value.trim();
   if (!name || !phone) return toast('Name and phone are required', 'red');
@@ -1837,6 +2322,7 @@ function populateSaleDropdowns() {
 }
 
 function openSaleModal() {
+  if (!ensureAdmin('Sales entry')) return;
   saleItems = [];
   renderSaleItems();
   document.getElementById('s-date').value = today();
@@ -1888,6 +2374,7 @@ function renderSaleItems() {
 }
 
 async function saveSale() {
+  if (!ensureAdmin('Sales entry')) return;
 
   if (saleItems.length === 0) return toast('Add at least one product', 'red');
 
@@ -1898,8 +2385,8 @@ async function saveSale() {
     if (prod) gstTotal += (item.qty * item.price * prod.gst / 100);
   });
 
-  const invNo = 'INV-' + String(data.invoiceCounter).padStart(3,'0');
-  data.invoiceCounter++;
+  refreshNextInvoiceNumber();
+  const invNo = getNextInvoiceNo();
 
   const customerId = document.getElementById('s-customer').value;
   const sale = {
@@ -1944,6 +2431,8 @@ async function saveSale() {
       closeModal('sale-modal');
       saleItems = [];
       await fetchAllFromSupabase();
+      refreshNextInvoiceNumber();
+      populateBillDropdowns();
       renderSalesTable();
       renderProductsTable();
       renderBillHistory();
@@ -1960,6 +2449,7 @@ async function saveSale() {
   saleItems.forEach(item => decrementProductStock(item.pid, item.qty, item.variantIndex));
   data.sales.push(sale);
   data.bills.push({ invNo, customerId, amount: sale.total, date: sale.date, format: 'Standard GST Invoice' });
+  data.invoiceCounter = Math.max(data.invoiceCounter || 1, getInvoiceNumberValue(invNo) + 1);
   saveData();
   closeModal('sale-modal');
   saleItems = [];
@@ -1969,11 +2459,285 @@ async function saveSale() {
   toast(`Sale recorded! Invoice ${invNo}`, 'green');
 }
 
+// =========================================================
+// ADD STOCK
+// =========================================================
+function renderStockPage() {
+  const tbody = document.getElementById('stock-history-table');
+  if (!tbody) return;
+  const entries = [...(data.stockEntries || [])].sort((a, b) => new Date(b.receivedDate) - new Date(a.receivedDate));
+  tbody.innerHTML = entries.map(e => {
+    const p = data.products.find(x => x.id === e.productId);
+    return `<tr>
+      <td class="text-muted text-sm">${fmtDate(e.receivedDate)}</td>
+      <td>${p ? p.name : 'Deleted product'}</td>
+      <td>${e.variantName || 'Base product'}</td>
+      <td><span class="badge badge-green">+${e.qty}</span></td>
+      <td>${e.source || '—'}</td>
+      <td class="text-muted text-sm">${e.addedBy || '—'}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6" class="text-muted" style="text-align:center;padding:24px;">No stock additions recorded yet</td></tr>';
+}
+
+function openStockModal() {
+  populateProductDropdowns();
+  document.getElementById('stock-date').value = today();
+  document.getElementById('stock-source').value = '';
+  document.getElementById('stock-notes').value = '';
+  const body = document.getElementById('stock-batch-body');
+  if (body) body.innerHTML = '';
+  addStockBatchRow();
+  openModal('stock-modal');
+}
+
+function addStockBatchRow(row = {}) {
+  const tbody = document.getElementById('stock-batch-body');
+  if (!tbody) return;
+  const rowId = 'stock-row-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+  const productOptions = '<option value="">Select Product</option>' + data.products.map(p => {
+    const hasVars = (p.variants || []).length > 0;
+    const displayStock = hasVars ? (p.variants || []).reduce((t,v)=>t+(Number(v.stock)||0),0) : p.stock;
+    return `<option value="${p.id}">${escapeHtml(p.name)} (Current: ${displayStock} ${escapeHtml(p.unit || 'pcs')})</option>`;
+  }).join('');
+
+  const tr = document.createElement('tr');
+  tr.setAttribute('data-rowid', rowId);
+  tr.innerHTML = `
+    <td style="min-width:260px;">
+      <select class="stock-row-product" onchange="populateStockRowVariants('${rowId}')">${productOptions}</select>
+    </td>
+    <td style="min-width:220px;">
+      <select class="stock-row-variant"><option value="">Base product</option></select>
+    </td>
+    <td style="width:150px;">
+      <input class="stock-row-qty" type="number" min="1" placeholder="0" value="${row.qty || ''}">
+    </td>
+    <td style="width:44px;">
+      <button type="button" class="btn btn-danger btn-sm" style="padding:6px 10px;" onclick="removeStockBatchRow('${rowId}')">Del</button>
+    </td>
+  `;
+  tbody.appendChild(tr);
+  if (row.productId) tr.querySelector('.stock-row-product').value = row.productId;
+  populateStockRowVariants(rowId, row.variantIndex ?? '');
+}
+
+function removeStockBatchRow(rowId) {
+  const el = document.querySelector(`#stock-batch-body tr[data-rowid="${CSS.escape(rowId)}"]`);
+  if (el) el.remove();
+}
+
+function populateStockRowVariants(rowId, selectedValue = '') {
+  const row = document.querySelector(`#stock-batch-body tr[data-rowid="${CSS.escape(rowId)}"]`);
+  if (!row) return;
+  const pid = row.querySelector('.stock-row-product')?.value || '';
+  const variantSel = row.querySelector('.stock-row-variant');
+  if (!variantSel) return;
+  if (!pid) {
+    variantSel.innerHTML = '<option value="">Base product</option>';
+    return;
+  }
+  const p = data.products.find(x => x.id === pid);
+  const variants = p?.variants || [];
+  if (!variants.length) {
+    variantSel.innerHTML = '<option value="">Base product</option>';
+    return;
+  }
+  variantSel.innerHTML = '<option value="">Choose variant</option>' + variants.map((v, idx) => {
+    const label = v?.name || `Variant ${idx + 1}`;
+    return `<option value="${idx}">${escapeHtml(label)} — Current: ${v?.stock ?? 0}</option>`;
+  }).join('');
+  variantSel.value = String(selectedValue ?? '');
+}
+
+function getStockBatchRows() {
+  const rows = [...document.querySelectorAll('#stock-batch-body tr')];
+  return rows.map(r => {
+    const pid = r.querySelector('.stock-row-product')?.value || '';
+    const variantValue = r.querySelector('.stock-row-variant')?.value || '';
+    const qty = parseInt(r.querySelector('.stock-row-qty')?.value || '');
+    return {
+      pid,
+      variantIndex: variantValue === '' ? null : parseInt(variantValue),
+      qty,
+    };
+  }).filter(r => r.pid || r.qty);
+}
+
+async function saveStockEntry() {
+  const receivedDate = document.getElementById('stock-date').value;
+  const source = document.getElementById('stock-source').value.trim();
+  const notes = document.getElementById('stock-notes').value.trim();
+  if (!receivedDate) return toast('Select received date', 'amber');
+  if (!source) return toast('Enter where the stock came from', 'amber');
+  const rows = getStockBatchRows();
+  if (!rows.length) return toast('Add at least one product row', 'amber');
+
+  const updates = [];
+  for (const row of rows) {
+    if (!row.pid) return toast('Every stock row needs a product', 'amber');
+    if (!row.qty || row.qty < 1) return toast('Every stock row needs quantity received', 'amber');
+    const p = data.products.find(x => x.id === row.pid);
+    if (!p) return toast('Product not found', 'red');
+    const variants = Array.isArray(p.variants) ? [...p.variants] : [];
+    const variant = row.variantIndex === null ? null : variants[row.variantIndex];
+    if (variants.length && row.variantIndex === null) return toast(`Select a variant for ${p.name}`, 'amber');
+
+    const updatedProduct = { ...p, variants };
+    if (variant) {
+      updatedProduct.variants[row.variantIndex] = { ...variant, stock: (Number(variant.stock) || 0) + row.qty };
+      updatedProduct.stock = updatedProduct.variants.reduce((sum, v) => sum + (Number(v.stock) || 0), 0);
+    } else {
+      updatedProduct.stock = (Number(p.stock) || 0) + row.qty;
+    }
+
+    updates.push({
+      product: updatedProduct,
+      entry: {
+        id: 'st' + Date.now() + Math.random().toString(16).slice(2),
+        productId: row.pid,
+        variantIndex: row.variantIndex,
+        variantName: variant?.name || '',
+        qty: row.qty,
+        source,
+        receivedDate,
+        notes,
+        addedBy: currentUser?.username || 'Unknown',
+      }
+    });
+  }
+
+  if (isSupabaseEnabled()) {
+    for (const item of updates) {
+      const hasVariants = Array.isArray(item.product.variants) && item.product.variants.length > 0;
+      const updatePayload = hasVariants
+        ? { stock: item.product.stock, variants: item.product.variants }
+        : { stock: item.product.stock };
+      const { error: productError } = await supabaseClient.from('products').update(updatePayload).eq('id', item.product.id);
+      if (productError) return toast(productError.message, 'red');
+    }
+    const entryRows = updates.map(item => ({
+      user_id: sessionUserId,
+      product_id: item.entry.productId,
+      variant_index: item.entry.variantIndex,
+      variant_name: item.entry.variantName || null,
+      quantity: item.entry.qty,
+      source,
+      received_date: receivedDate,
+      notes,
+      added_by: item.entry.addedBy,
+    }));
+    const { error: entryError } = await supabaseClient.from('stock_entries').insert(entryRows);
+    if (entryError) return toast('Stock updated, but history table is missing. Run supabase-schema.sql.', 'amber');
+    await fetchAllFromSupabase();
+  } else {
+    updates.forEach(item => {
+      data.products = data.products.map(product => product.id === item.product.id ? item.product : product);
+      data.stockEntries = data.stockEntries || [];
+      data.stockEntries.push(item.entry);
+    });
+    saveData();
+  }
+
+  closeModal('stock-modal');
+  populateProductDropdowns();
+  renderStockPage();
+  renderProductsTable();
+  renderDashboard();
+  toast(`Stock added for ${updates.length} product${updates.length === 1 ? '' : 's'}`, 'green');
+}
+
 
 // =========================================================
 // BILLING
 // =========================================================
+function getInvoiceNumberValue(invNo) {
+  const match = String(invNo || '').match(/(\d+)(?!.*\d)/);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+function refreshNextInvoiceNumber() {
+  const maxNo = [...(data.sales || []), ...(data.bills || [])]
+    .map(x => getInvoiceNumberValue(x.invNo))
+    .reduce((max, n) => Math.max(max, n || 0), 0);
+  data.invoiceCounter = Math.max(Number(data.invoiceCounter) || 1, maxNo + 1);
+}
+
+function getNextInvoiceNo() {
+  return 'INV-' + String(Number(data.invoiceCounter) || 1).padStart(3, '0');
+}
+
+function normalizeBusinessInfo(info = {}) {
+  return {
+    ...DEFAULT_BUSINESS_INFO,
+    ...(info || {}),
+    stateCode: info?.stateCode ?? info?.state_code ?? DEFAULT_BUSINESS_INFO.stateCode,
+  };
+}
+
+function syncInvoiceHeaderFields() {
+  const b = normalizeBusinessInfo(data.businessInfo);
+  const pairs = {
+    'inv-business-name': b.name,
+    'inv-business-gstin': b.gstin,
+    'inv-business-address': b.address,
+    'inv-business-phone': b.phone,
+    'inv-business-email': b.email,
+    'inv-business-state': b.state,
+    'inv-business-state-code': b.stateCode,
+  };
+  Object.entries(pairs).forEach(([id, value]) => {
+    const el = document.getElementById(id);
+    if (el) el.value = value || '';
+  });
+}
+
+function getInvoiceBusinessInfoFromFields() {
+  return normalizeBusinessInfo({
+    name: document.getElementById('inv-business-name')?.value.trim() || DEFAULT_BUSINESS_INFO.name,
+    gstin: document.getElementById('inv-business-gstin')?.value.trim() || '',
+    address: document.getElementById('inv-business-address')?.value.trim() || '',
+    phone: document.getElementById('inv-business-phone')?.value.trim() || '',
+    email: document.getElementById('inv-business-email')?.value.trim() || '',
+    state: document.getElementById('inv-business-state')?.value.trim() || '',
+    stateCode: document.getElementById('inv-business-state-code')?.value.trim() || '',
+  });
+}
+
+async function saveInvoiceBusinessInfoFromFields() {
+  const info = getInvoiceBusinessInfoFromFields();
+  data.businessInfo = info;
+
+  if (isSupabaseEnabled()) {
+    const payload = {
+      user_id: sessionUserId,
+      name: info.name,
+      gstin: info.gstin,
+      address: info.address,
+      phone: info.phone,
+      email: info.email,
+      state: info.state,
+      state_code: info.stateCode,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (data.businessProfileId) {
+      const { error } = await supabaseClient.from('business_profiles').update(payload).eq('id', data.businessProfileId);
+      if (error) return toast(error.message, 'red');
+    } else {
+      const { data: inserted, error } = await supabaseClient.from('business_profiles').insert(payload).select('id').single();
+      if (error) return toast(error.message, 'red');
+      data.businessProfileId = inserted?.id || null;
+    }
+  }
+
+  saveData();
+}
+
 function setBillTab(tab) {
+  if (!isAdmin() && tab === 'history') {
+    toast('Bill history is available only to the owner', 'amber');
+    tab = 'create';
+  }
   currentBillTab = tab;
   document.getElementById('bill-create-tab').style.display = tab === 'create' ? 'block' : 'none';
   document.getElementById('bill-history-tab').style.display = tab === 'history' ? 'block' : 'none';
@@ -1984,7 +2748,9 @@ function setBillTab(tab) {
 function populateBillDropdowns() {
   populateCustomerDropdowns();
   populateProductDropdowns();
-  const n = 'INV-' + String(data.invoiceCounter).padStart(3,'0');
+  refreshNextInvoiceNumber();
+  syncInvoiceHeaderFields();
+  const n = getNextInvoiceNo();
   const el = document.getElementById('bill-inv-no');
   if (el) el.value = n;
 }
@@ -2050,23 +2816,26 @@ function autofillCustomer() {
 async function generateBill() {
   if (billItems.length === 0) return toast('Add at least one item', 'amber');
 
+  await saveInvoiceBusinessInfoFromFields();
 
-  const cid = document.getElementById('bill-customer').value;
+  const cid = isAdmin() ? document.getElementById('bill-customer').value : '';
   const cust = cid ? data.customers.find(c => c.id === cid) : null;
-  const format = document.getElementById('bill-format').value;
+  const format = isAdmin() ? document.getElementById('bill-format').value : 'gst';
   const invNo = document.getElementById('bill-inv-no').value;
   const date = document.getElementById('bill-date').value;
   const payment = document.getElementById('bill-payment').value;
-  const gstin = document.getElementById('bill-gstin').value;
+  const gstin = isAdmin() ? document.getElementById('bill-gstin').value : '';
 
   let subtotal = 0, gstTotal = 0;
+  const isChallan = format === 'challan';
   billItems.forEach(i => {
     const base = i.qty * i.price;
     subtotal += base;
-    gstTotal += base * i.gst / 100;
+    if (!isChallan) gstTotal += base * i.gst / 100;
   });
-  const cgst = gstTotal / 2;
-  const grand = subtotal + gstTotal;
+  const cgst = isChallan ? 0 : (gstTotal / 2);
+  const grand = isChallan ? subtotal : (subtotal + gstTotal);
+
 
   // If Supabase enabled, use Edge Function for atomic stock decrement + create rows.
   if (isSupabaseEnabled()) {
@@ -2102,6 +2871,8 @@ async function generateBill() {
       // Refresh from DB
       saleItems = [];
       await fetchAllFromSupabase();
+      refreshNextInvoiceNumber();
+      populateBillDropdowns();
       renderSalesTable();
       renderBillHistory();
       renderProductsTable();
@@ -2156,6 +2927,7 @@ async function generateBill() {
     date: sale.date,
     format: (format === 'gst') ? 'Standard GST Invoice' : (format === 'retail' ? 'Retail Invoice' : (format === 'b2b' ? 'B2B Tax Invoice' : 'Proforma Invoice'))
   });
+  data.invoiceCounter = Math.max(data.invoiceCounter || 1, getInvoiceNumberValue(invNo) + 1);
 
   saveData();
 
@@ -2167,6 +2939,8 @@ async function generateBill() {
   renderSalesTable();
   renderBillHistory();
   updateExpiryBadge();
+  refreshNextInvoiceNumber();
+  populateBillDropdowns();
 }
 
 
@@ -2175,6 +2949,17 @@ function getBillHTML(format, invNo, date, cust, gstin, payment, subtotal, cgst, 
   const itemRows = billItems.map(item => {
     const amt = item.qty * item.price;
     const gstAmt = amt * item.gst / 100;
+
+    if (isChallan) {
+      return `<tr>
+        <td style="padding:8px;border-bottom:1px solid #eee;">${item.name}</td>
+        <td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">${item.hsn||'—'}</td>
+        <td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">${item.qty}</td>
+        <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">₹${fmt(item.price)}</td>
+        <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;font-weight:600;">₹${fmt(amt)}</td>
+      </tr>`;
+    }
+
     return `<tr>
       <td style="padding:8px;border-bottom:1px solid #eee;">${item.name}</td>
       <td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">${item.hsn||'—'}</td>
@@ -2186,23 +2971,30 @@ function getBillHTML(format, invNo, date, cust, gstin, payment, subtotal, cgst, 
     </tr>`;
   }).join('');
 
+
   const headers = {
     gst: 'TAX INVOICE',
     retail: 'RETAIL INVOICE',
     b2b: 'B2B TAX INVOICE',
-    proforma: 'PROFORMA INVOICE'
+    proforma: 'PROFORMA INVOICE',
+    challan: 'DELIVERY CHALLAN'
   };
   const label = headers[format] || 'TAX INVOICE';
-  const accentColor = format === 'proforma' ? '#6c63ff' : format === 'b2b' ? '#1a73e8' : format === 'retail' ? '#e67e22' : '#1a5f3a';
+  const accentColor = format === 'proforma' ? '#6c63ff' : format === 'b2b' ? '#1a73e8' : format === 'retail' ? '#e67e22' : format === 'challan' ? '#0ea5e9' : '#1a5f3a';
+
+  const isChallan = format === 'challan';
+  const challanOnlyColumns = isChallan;
+
 
   return `<div class="bill-preview">
     <div style="background:${accentColor};color:white;padding:20px 24px;border-radius:8px 8px 0 0;margin:-32px -32px 24px;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;">
         <div>
           <div style="font-size:22px;font-weight:700;font-family:Playfair Display,serif;">${b.name}</div>
-          <div style="font-size:11px;opacity:0.85;margin-top:4px;">GSTIN: ${b.gstin}</div>
+          <div style="font-size:11px;opacity:0.85;margin-top:4px;">${isChallan ? 'Address' : 'GSTIN: ' + b.gstin}</div>
           <div style="font-size:11px;opacity:0.85;">${b.address}</div>
           <div style="font-size:11px;opacity:0.85;">${b.phone} | ${b.email}</div>
+
         </div>
         <div style="text-align:right;">
           <div style="font-size:14px;font-weight:700;opacity:0.7;letter-spacing:1px;">${label}</div>
@@ -2228,9 +3020,9 @@ function getBillHTML(format, invNo, date, cust, gstin, payment, subtotal, cgst, 
           <th style="padding:10px 8px;text-align:center;font-size:11px;color:#444;">HSN</th>
           <th style="padding:10px 8px;text-align:center;font-size:11px;color:#444;">Qty</th>
           <th style="padding:10px 8px;text-align:right;font-size:11px;color:#444;">Rate</th>
-          <th style="padding:10px 8px;text-align:center;font-size:11px;color:#444;">GST%</th>
-          <th style="padding:10px 8px;text-align:right;font-size:11px;color:#444;">Tax Amt</th>
-          <th style="padding:10px 8px;text-align:right;font-size:11px;color:#444;">Total</th>
+          ${isChallan ? '' : `<th style="padding:10px 8px;text-align:center;font-size:11px;color:#444;">GST%</th>`}
+          ${isChallan ? '' : `<th style="padding:10px 8px;text-align:right;font-size:11px;color:#444;">Tax Amt</th>`}
+          <th style="padding:10px 8px;text-align:right;font-size:11px;color:#444;">${isChallan ? 'Amount' : 'Total'}</th>
         </tr>
       </thead>
       <tbody>${itemRows}</tbody>
@@ -2239,18 +3031,20 @@ function getBillHTML(format, invNo, date, cust, gstin, payment, subtotal, cgst, 
     <div style="display:flex;justify-content:flex-end;margin-top:16px;">
       <div style="min-width:220px;font-size:13px;">
         <div style="display:flex;justify-content:space-between;padding:6px 0;color:#555;"><span>Subtotal</span><span>₹${fmt(subtotal)}</span></div>
-        <div style="display:flex;justify-content:space-between;padding:6px 0;color:#555;"><span>CGST</span><span>₹${fmt(cgst)}</span></div>
-        <div style="display:flex;justify-content:space-between;padding:6px 0;color:#555;"><span>SGST</span><span>₹${fmt(cgst)}</span></div>
+        ${isChallan ? '' : `<div style="display:flex;justify-content:space-between;padding:6px 0;color:#555;"><span>CGST</span><span>₹${fmt(cgst)}</span></div>`}
+        ${isChallan ? '' : `<div style="display:flex;justify-content:space-between;padding:6px 0;color:#555;"><span>SGST</span><span>₹${fmt(cgst)}</span></div>`}
         <div style="display:flex;justify-content:space-between;padding:10px 0;border-top:2px solid ${accentColor};font-size:16px;font-weight:700;color:${accentColor};margin-top:4px;">
-          <span>GRAND TOTAL</span><span>₹${fmt(grand)}</span>
+          <span>${isChallan ? 'GRAND TOTAL' : 'GRAND TOTAL'}</span><span>₹${fmt(grand)}</span>
         </div>
       </div>
     </div>
 
+
     <div style="border-top:1px solid #eee;margin-top:20px;padding-top:16px;font-size:11px;color:#888;display:flex;justify-content:space-between;">
       <div>
         <strong style="color:#333;">State:</strong> ${b.state} (Code: ${b.stateCode})<br>
-        ${format==='proforma' ? '⚠ This is a proforma invoice and not a tax document.' : 'This is a computer-generated invoice.'}
+        ${isChallan ? 'This is a computer-generated delivery challan.' : (format==='proforma' ? '⚠ This is a proforma invoice and not a tax document.' : 'This is a computer-generated invoice.')}
+
       </div>
       <div style="text-align:right;">
         <div style="font-size:10px;color:#aaa;margin-bottom:24px;">Authorized Signatory</div>
@@ -2276,6 +3070,20 @@ function downloadBill() {
 function openNewBillModal() {
   billItems = [];
   renderBillItems();
+  refreshNextInvoiceNumber();
+  const invEl = document.getElementById('bill-inv-no');
+  if (invEl) invEl.value = getNextInvoiceNo();
+  const dateEl = document.getElementById('bill-date');
+  if (dateEl) dateEl.value = today();
+  syncInvoiceHeaderFields();
+  const preview = document.getElementById('bill-preview-area');
+  if (preview) {
+    preview.innerHTML = `<div class="card" style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:300px;color:var(--muted);">
+      <div style="font-size:48px;margin-bottom:12px;">◎</div>
+      <p>Your bill preview will appear here</p>
+      <p class="text-sm mt-3">Fill in customer details and add products to generate</p>
+    </div>`;
+  }
   setBillTab('create');
 }
 
@@ -2297,6 +3105,7 @@ function renderBillHistory() {
 // SALES REPORT (CA/TAX)
 // =========================================================
 function renderSalesReportPage() {
+  if (!ensureAdmin('Sales reports')) return;
   // populate customer filter
   const sel = document.getElementById('report-customer-filter');
   if (sel) {
@@ -2310,6 +3119,7 @@ function renderSalesReportPage() {
 }
 
 function updateReportStats() {
+  if (!isAdmin()) return;
   const from = document.getElementById('report-from-date')?.value || '';
   const to = document.getElementById('report-to-date')?.value || '';
   const customerId = document.getElementById('report-customer-filter')?.value || '';
@@ -2422,6 +3232,7 @@ function updateReportStats() {
 }
 
 function generateSalesReport() {
+  if (!ensureAdmin('Sales reports')) return;
   // Ensure latest stats
   updateReportStats();
   // Uses browser print (Save as PDF)
@@ -2436,6 +3247,24 @@ function viewBillByInv(invNo) {
 function viewBill(saleId) {
   navigate('billing');
   toast('Showing bill preview', 'green');
+}
+
+// =========================================================
+// ADMIN
+// =========================================================
+function renderAdminPage() {
+  if (!document.getElementById('admin-users-table')) return;
+  if (!isAdmin()) return;
+  const users = getRegisteredUsers();
+  document.getElementById('admin-user-count').textContent = String(users.length);
+  document.getElementById('admin-stock-count').textContent = String((data.stockEntries || []).length);
+  document.getElementById('admin-users-table').innerHTML = users.map(u => `
+    <tr>
+      <td>${u.username}</td>
+      <td><span class="badge badge-blue">Employee/User</span></td>
+      <td class="text-muted text-sm">${fmtDate(u.createdAt)}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="3" class="text-muted" style="text-align:center;padding:24px;">No employee users registered yet</td></tr>';
 }
 
 // =========================================================
@@ -2849,6 +3678,15 @@ function escapeHtmlAttr(str) {
     .replaceAll("'", '&#39;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;');
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 
