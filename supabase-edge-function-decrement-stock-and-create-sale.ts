@@ -18,6 +18,12 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 
 type Item = { pid: string; variantIndex?: number | null; qty: number; price: number };
 type Variant = { name?: string; stock?: number; price?: number };
+type StockPlan = {
+  product: ProductRow;
+  variants: Variant[];
+  baseQty: number;
+  variantQtyByIndex: Map<number, number>;
+};
 
 type ProductRow = {
   id: string;
@@ -43,6 +49,10 @@ function round2(n: number) {
 function getVariant(variants: unknown, variantIndex?: number | null): Variant | null {
   if (typeof variantIndex !== "number" || !Array.isArray(variants)) return null;
   return (variants[variantIndex] || null) as Variant | null;
+}
+
+function isValidNumber(n: unknown) {
+  return typeof n === "number" && Number.isFinite(n);
 }
 
 function errorResponse(
@@ -155,8 +165,16 @@ Deno.serve(async (req) => {
   }
 
   for (const item of items) {
-    if (!item?.pid || typeof item.qty !== "number" || item.qty <= 0 || typeof item.price !== "number") {
+    if (!item?.pid || !isValidNumber(item.qty) || item.qty <= 0 || !isValidNumber(item.price) || item.price < 0) {
       return errorResponse("Each item must have valid pid, qty (>0), and price", 400);
+    }
+
+    if (
+      item.variantIndex !== undefined &&
+      item.variantIndex !== null &&
+      (!Number.isInteger(item.variantIndex) || item.variantIndex < 0)
+    ) {
+      return errorResponse("variantIndex must be a non-negative integer or null", 400);
     }
   }
 
@@ -193,11 +211,12 @@ Deno.serve(async (req) => {
   }
 
   const pids = items.map((i) => i.pid);
+  const uniquePids = Array.from(new Set(pids));
 
   const { data: products, error: pErr } = await supabase
     .from("products")
     .select("id, user_id, stock, gst, price, name, unit, hsn, variants")
-    .in("id", pids)
+    .in("id", uniquePids)
     .eq("user_id", userId);
 
   if (pErr) {
@@ -205,26 +224,73 @@ Deno.serve(async (req) => {
     return databaseErrorResponse("Failed to fetch products", pErr);
   }
 
-  if (!products || products.length !== pids.length) {
+  if (!products || products.length !== uniquePids.length) {
     const foundIds = new Set((products || []).map((p: any) => p.id));
-    const missing = pids.find((id) => !foundIds.has(id));
+    const missing = uniquePids.find((id) => !foundIds.has(id));
     return errorResponse(`Product not found: ${missing}`, 404);
   }
 
   const prodById = new Map((products as ProductRow[]).map((p) => [p.id, p]));
 
-  // Validate stock availability BEFORE any updates
+  // Build one stock update plan per product. This avoids duplicate product IDs
+  // causing false "not found" errors or optimistic-lock conflicts.
+  const stockPlans = new Map<string, StockPlan>();
+
   for (const it of items) {
     const p = prodById.get(it.pid);
     if (!p) continue;
-    const variant = getVariant(p.variants, it.variantIndex);
-    const availableStock = variant ? Number(variant.stock || 0) : Number(p.stock || 0);
-    const stockLabel = variant?.name ? `${p.name} - ${variant.name}` : p.name;
 
-    if (availableStock < it.qty) {
-      return errorResponse(`Insufficient stock for ${stockLabel} (available: ${availableStock}, required: ${it.qty})`, 409, {
+    let plan = stockPlans.get(p.id);
+    if (!plan) {
+      plan = {
+        product: p,
+        variants: Array.isArray(p.variants) ? [...(p.variants as Variant[])] : [],
+        baseQty: 0,
+        variantQtyByIndex: new Map(),
+      };
+      stockPlans.set(p.id, plan);
+    }
+
+    if (typeof it.variantIndex === "number") {
+      if (!plan.variants[it.variantIndex]) {
+        return errorResponse(`Invalid variant selected for ${p.name}`, 400, {
+          code: "INVALID_VARIANT",
+        });
+      }
+
+      plan.variantQtyByIndex.set(
+        it.variantIndex,
+        (plan.variantQtyByIndex.get(it.variantIndex) || 0) + it.qty,
+      );
+    } else {
+      plan.baseQty += it.qty;
+    }
+  }
+
+  // Validate stock availability BEFORE any updates.
+  for (const plan of stockPlans.values()) {
+    const p = plan.product;
+    const totalRequested =
+      plan.baseQty +
+      Array.from(plan.variantQtyByIndex.values()).reduce((sum, qty) => sum + qty, 0);
+    const productStock = Number(p.stock || 0);
+
+    if (productStock < totalRequested) {
+      return errorResponse(`Insufficient stock for ${p.name} (available: ${productStock}, required: ${totalRequested})`, 409, {
         code: "INSUFFICIENT_STOCK",
       });
+    }
+
+    for (const [variantIndex, qty] of plan.variantQtyByIndex) {
+      const variant = plan.variants[variantIndex];
+      const availableStock = Number(variant.stock || 0);
+      const stockLabel = variant?.name ? `${p.name} - ${variant.name}` : p.name;
+
+      if (availableStock < qty) {
+        return errorResponse(`Insufficient stock for ${stockLabel} (available: ${availableStock}, required: ${qty})`, 409, {
+          code: "INSUFFICIENT_STOCK",
+        });
+      }
     }
   }
 
@@ -263,30 +329,33 @@ Deno.serve(async (req) => {
   // Update stock with optimistic locking (guard clause)
   const stockUpdateErrors: string[] = [];
 
-  for (const it of items) {
-    const p = prodById.get(it.pid) as ProductRow;
-    const variants = Array.isArray(p.variants) ? [...(p.variants as Variant[])] : [];
-    const variantIndex = typeof it.variantIndex === "number" ? it.variantIndex : null;
+  for (const plan of stockPlans.values()) {
+    const p = plan.product;
     const updatePayload: Record<string, unknown> = {};
+    const variantQtyTotal = Array.from(plan.variantQtyByIndex.values()).reduce((sum, qty) => sum + qty, 0);
+    const newStock = Math.max(0, Number(p.stock || 0) - plan.baseQty - variantQtyTotal);
 
-    if (variantIndex !== null && variants[variantIndex]) {
-      variants[variantIndex] = {
-        ...variants[variantIndex],
-        stock: Math.max(0, Number(variants[variantIndex].stock || 0) - it.qty),
-      };
-      updatePayload.variants = variants;
-      updatePayload.stock = variants.reduce((sum, v) => sum + Number(v.stock || 0), 0);
-    } else {
-      updatePayload.stock = Math.max(0, Number(p.stock || 0) - it.qty);
+    if (plan.variantQtyByIndex.size > 0) {
+      for (const [variantIndex, qty] of plan.variantQtyByIndex) {
+        const variant = plan.variants[variantIndex];
+        plan.variants[variantIndex] = {
+          ...variant,
+          stock: Math.max(0, Number(variant.stock || 0) - qty),
+        };
+      }
+
+      updatePayload.variants = plan.variants;
     }
+
+    updatePayload.stock = newStock;
 
     const { error: uErr, data: updatedRows } = await supabase
       .from("products")
       .update(updatePayload)
-      .eq("id", it.pid)
+      .eq("id", p.id)
       .eq("user_id", userId)
       // optimistic lock on stock value
-      .eq("stock", Number(p.stock))
+      .eq("stock", Number(p.stock || 0))
       .select("id");
 
     if (uErr) stockUpdateErrors.push(`Failed to update stock for ${p.name}: stock may have changed`);

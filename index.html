@@ -2292,33 +2292,85 @@ function openCustomerModal(id) {
 
 function saveCustomer() {
   if (!ensureAdmin('Customer management')) return;
+
   const name = document.getElementById('c-name').value.trim();
   const phone = document.getElementById('c-phone').value.trim();
   if (!name || !phone) return toast('Name and phone are required', 'red');
 
   const editId = document.getElementById('customer-edit-id').value;
+
+  const email = document.getElementById('c-email').value;
+  const gstin = document.getElementById('c-gstin').value;
+  const city = document.getElementById('c-city').value;
+  const address = document.getElementById('c-address').value;
+
+  // Always update UI/local state first (better UX)
   const customer = {
     id: editId || 'c' + Date.now(),
-    name, phone,
-    email: document.getElementById('c-email').value,
-    gstin: document.getElementById('c-gstin').value,
-    city: document.getElementById('c-city').value,
-    address: document.getElementById('c-address').value,
-    purchases: editId ? data.customers.find(c => c.id === editId).purchases : [],
+    name,
+    phone,
+    email,
+    gstin,
+    city,
+    address,
+    purchases: editId ? data.customers.find(c => c.id === editId)?.purchases : [],
   };
 
   if (editId) {
     const idx = data.customers.findIndex(c => c.id === editId);
-    data.customers[idx] = customer;
+    if (idx !== -1) data.customers[idx] = customer;
   } else {
     data.customers.push(customer);
   }
 
-  saveData();
-  closeModal('customer-modal');
-  renderCustomersTable();
-  populateCustomerDropdowns();
-  toast((editId ? 'Customer updated' : 'Customer added'), 'green');
+  // Persist to Supabase if enabled
+  (async () => {
+    if (isSupabaseEnabled()) {
+      try {
+        const payload = {
+          user_id: sessionUserId,
+          name,
+          phone,
+          email: email || null,
+          gstin: gstin || null,
+          city: city || null,
+          address: address || null,
+          updated_at: new Date().toISOString(),
+        };
+
+        if (editId) {
+          const { error } = await supabaseClient
+            .from('customers')
+            .update(payload)
+            .eq('id', editId)
+            .eq('user_id', sessionUserId);
+
+          if (error) throw error;
+        } else {
+          const { error } = await supabaseClient
+            .from('customers')
+            .insert(payload);
+
+          if (error) throw error;
+        }
+
+        // Reload to ensure we have the real UUID from DB
+        await fetchAllFromSupabase();
+      } catch (e) {
+        console.error('saveCustomer Supabase error:', e);
+        toast(e?.message || 'Failed to save customer in Supabase', 'red');
+        return;
+      }
+    } else {
+      // localStorage fallback
+      saveData();
+    }
+
+    closeModal('customer-modal');
+    renderCustomersTable();
+    populateCustomerDropdowns();
+    toast((editId ? 'Customer updated' : 'Customer added') + ' successfully', 'green');
+  })();
 }
 
 // =========================================================
