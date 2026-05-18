@@ -768,7 +768,7 @@
           <select id="bill-format" class="admin-only" style="width:180px;">
             <option value="gst">Standard GST Invoice</option>
             <option value="retail">Retail Invoice</option>
-            <option value="b2b">B2B Tax Invoice</option>
+            <option value="b2b">B2B Estimate Invoice</option>
             <option value="proforma">Proforma Invoice</option>
             <option value="challan">Delivery Challan (Prices Only)</option>
           </select>
@@ -2373,9 +2373,6 @@ function saveCustomer() {
   })();
 }
 
-// =========================================================
-// SALES
-// =========================================================
 function renderSalesTable() {
   const q = (document.getElementById('sales-search')?.value || '').toLowerCase();
   const sales = data.sales.filter(s => {
@@ -2956,7 +2953,7 @@ async function generateBill() {
               : (format === 'retail'
                 ? 'Retail Invoice'
                 : (format === 'b2b'
-                  ? 'B2B Tax Invoice'
+                  ? 'B2B Estimate Invoice'
                   : (format === 'challan' ? 'Delivery Challan' : 'Proforma Invoice'))),
             billGstin: gstin || null,
           }
@@ -3032,7 +3029,7 @@ async function generateBill() {
       : (format === 'retail'
         ? 'Retail Invoice'
         : (format === 'b2b'
-          ? 'B2B Tax Invoice'
+          ? 'B2B Estimate Invoice'
           : (format === 'challan' ? 'Delivery Challan' : 'Proforma Invoice')))
   });
   data.invoiceCounter = Math.max(data.invoiceCounter || 1, getInvoiceNumberValue(invNo) + 1);
@@ -3082,13 +3079,13 @@ function getBillHTML(format, invNo, date, cust, gstin, payment, subtotal, cgst, 
 
 
   const headers = {
-    gst: 'TAX INVOICE',
+    gst: 'Estimate Invoice',
     retail: 'RETAIL INVOICE',
-    b2b: 'B2B TAX INVOICE',
+    b2b: 'B2B Estimate Invoice',
     proforma: 'PROFORMA INVOICE',
     challan: 'DELIVERY CHALLAN'
   };
-  const label = headers[format] || 'TAX INVOICE';
+  const label = headers[format] || 'Estimate Invoice';
   const accentColor = format === 'proforma' ? '#6c63ff' : format === 'b2b' ? '#1a73e8' : format === 'retail' ? '#e67e22' : format === 'challan' ? '#0ea5e9' : '#1a5f3a';
 
   const isChallan = format === 'challan'; // used only inside getBillHTML
