@@ -168,6 +168,22 @@ create table if not exists public.sales (
   unique(user_id, inv_no)
 );
 
+-- Existing Supabase projects created before the billing flow was finalized
+-- need these migrations because create table if not exists does not add columns.
+alter table public.sales
+add column if not exists inv_no text,
+add column if not exists customer_id uuid,
+add column if not exists items jsonb not null default '[]'::jsonb,
+add column if not exists subtotal numeric(12,2) not null default 0,
+add column if not exists gst numeric(12,2) not null default 0,
+add column if not exists total numeric(12,2) not null default 0,
+add column if not exists sale_date date not null default current_date,
+add column if not exists payment_mode text not null default 'Cash',
+add column if not exists updated_at timestamptz not null default now();
+
+create unique index if not exists sales_user_inv_no_unique_idx
+on public.sales(user_id, inv_no);
+
 drop trigger if exists set_sales_user_id
 on public.sales;
 
@@ -191,6 +207,17 @@ create table if not exists public.bills (
   updated_at timestamptz not null default now(),
   unique(user_id, inv_no)
 );
+
+alter table public.bills
+add column if not exists inv_no text,
+add column if not exists customer_id uuid,
+add column if not exists amount numeric(12,2) not null default 0,
+add column if not exists bill_date date not null default current_date,
+add column if not exists format text not null default 'Standard GST Invoice',
+add column if not exists updated_at timestamptz not null default now();
+
+create unique index if not exists bills_user_inv_no_unique_idx
+on public.bills(user_id, inv_no);
 
 drop trigger if exists set_bills_user_id
 on public.bills;

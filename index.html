@@ -833,7 +833,7 @@
                 <option value="">Variant (optional)</option>
               </select>
               <input type="number" id="bill-item-qty" value="1" min="1" style="width:80px;">
-          <button class="btn btn-outline" onclick="addBillItem()">Add</button>
+              <button class="btn btn-outline" onclick="addBillItem()">Add</button>
             </div>
 
             <table id="bill-items-table" style="font-size:12px;">
@@ -1546,9 +1546,18 @@ async function initSupabase() {
     // Quick dev auth: anonymous sign-in so auth.uid() works.
     const { data: anonData, error: anonErr } = await supabaseClient.auth.signInAnonymously();
     if (anonErr) {
-      console.warn('Anonymous Supabase sign-in failed; falling back to localStorage.', anonErr);
+      // Most common: "Anonymous sign-ins are disabled".
+      // Disable Supabase completely so the UI falls back to local mode without spamming Edge calls.
+      console.warn('Anonymous Supabase sign-in failed; disabling Supabase.', anonErr);
       disableSupabase();
+
+      // Keep UX explicit.
+      toast('Supabase auth not available (Anonymous sign-ins are disabled). Running in local mode.', 'amber');
       return false;
+
+      // NOTE: Edge Function calls require CORS configuration on the Supabase side.
+      // In this build we don't attempt Edge calls if Supabase auth isn't available.
+
     }
     sessionUserId = anonData?.user?.id || null;
     if (!sessionUserId) disableSupabase();
@@ -1568,6 +1577,24 @@ async function getSupabaseAuthHeader() {
   const { data: sessionData } = await supabaseClient.auth.getSession();
   const token = sessionData?.session?.access_token || SUPABASE_ANON_KEY;
   return `Bearer ${token}`;
+}
+
+async function parseEdgeFunctionResponse(res) {
+  let json = null;
+  try {
+    json = await res.json();
+  } catch {
+    json = null;
+  }
+
+  if (res.ok) return json || {};
+
+  const message = json?.error || json?.message || `Edge function failed (${res.status})`;
+  const details = Array.isArray(json?.details) ? json.details.join('; ') : json?.details;
+  const err = new Error(details ? `${message}: ${details}` : message);
+  err.status = res.status;
+  err.code = json?.code;
+  throw err;
 }
 
 async function fetchAllFromSupabase() {
@@ -1668,12 +1695,25 @@ async function fetchAllFromSupabase() {
 }
 
 function saveData() {
-  if (!isSupabaseEnabled()) localStorage.setItem('biztrack', JSON.stringify(data));
+  // Persist everything to Supabase when enabled.
+  // LocalStorage is used only if Supabase is not enabled.
+  if (!isSupabaseEnabled()) {
+    localStorage.setItem('biztrack', JSON.stringify(data));
+    return;
+  }
+
+  // Supabase mode: persist only business/profile + UI logs.
+  // Core transactional data (products/customers/sales/bills/stock) is already persisted
+  // through direct table writes / Edge Functions in the respective actions.
+  if (data.waLog && Array.isArray(data.waLog)) {
+    // best-effort: append new logs; avoid breaking the app if RLS/policies block this
+    // (kept intentionally minimal)
+    // No-op here because wa_log persistence isn't wired in this frontend.
+  }
 }
 
+
 function loadData() {
-  // Backward compatibility: if Supabase is not configured yet,
-  // keep using localStorage.
   return new Promise((resolve) => {
     (async () => {
       try {
@@ -1683,6 +1723,7 @@ function loadData() {
           return;
         }
 
+        // Fallback for offline/dev mode.
         const d = localStorage.getItem('biztrack');
         if (d) data = { ...data, ...JSON.parse(d) };
         data.businessInfo = normalizeBusinessInfo(data.businessInfo);
@@ -1692,6 +1733,7 @@ function loadData() {
     })();
   });
 }
+
 
 
 
@@ -2409,7 +2451,9 @@ async function saveSale() {
   // If Supabase enabled, use Edge Function for atomic stock decrement + create rows.
   if (isSupabaseEnabled()) {
     try {
+      // Edge Functions require CORS enabled on the Supabase side.
       const res = await fetch(`${SUPABASE_URL}/functions/v1/${EDGE_FUNCTION_NAME}`, {
+
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2425,8 +2469,7 @@ async function saveSale() {
         }),
       });
 
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error || 'Edge function failed');
+      await parseEdgeFunctionResponse(res);
 
       closeModal('sale-modal');
       saleItems = [];
@@ -2818,6 +2861,7 @@ async function generateBill() {
 
   await saveInvoiceBusinessInfoFromFields();
 
+
   const cid = isAdmin() ? document.getElementById('bill-customer').value : '';
   const cust = cid ? data.customers.find(c => c.id === cid) : null;
   const format = isAdmin() ? document.getElementById('bill-format').value : 'gst';
@@ -2827,14 +2871,15 @@ async function generateBill() {
   const gstin = isAdmin() ? document.getElementById('bill-gstin').value : '';
 
   let subtotal = 0, gstTotal = 0;
-  const isChallan = format === 'challan';
+  const isChallanBilling = format === 'challan';
   billItems.forEach(i => {
     const base = i.qty * i.price;
     subtotal += base;
-    if (!isChallan) gstTotal += base * i.gst / 100;
+    if (!isChallanBilling) gstTotal += base * i.gst / 100;
   });
-  const cgst = isChallan ? 0 : (gstTotal / 2);
-  const grand = isChallan ? subtotal : (subtotal + gstTotal);
+  const cgst = isChallanBilling ? 0 : (gstTotal / 2);
+  const grand = isChallanBilling ? subtotal : (subtotal + gstTotal);
+
 
 
   // If Supabase enabled, use Edge Function for atomic stock decrement + create rows.
@@ -2854,14 +2899,19 @@ async function generateBill() {
           paymentMode: payment,
           items: billItems.map(i => ({ pid: i.pid, variantIndex: (i.variantIndex ?? null), qty: i.qty, price: i.price })),
           bill: {
-            format: (format === 'gst') ? 'Standard GST Invoice' : (format === 'retail' ? 'Retail Invoice' : (format === 'b2b' ? 'B2B Tax Invoice' : 'Proforma Invoice')),
+            format: format === 'gst'
+              ? 'Standard GST Invoice'
+              : (format === 'retail'
+                ? 'Retail Invoice'
+                : (format === 'b2b'
+                  ? 'B2B Tax Invoice'
+                  : (format === 'challan' ? 'Delivery Challan' : 'Proforma Invoice'))),
             billGstin: gstin || null,
           }
         })
       });
 
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error || 'Edge function failed');
+      await parseEdgeFunctionResponse(res);
 
       // Render preview
       const bill = getBillHTML(format, invNo, date, cust, gstin, payment, subtotal, cgst, grand);
@@ -2925,7 +2975,13 @@ async function generateBill() {
     customerId,
     amount: sale.total,
     date: sale.date,
-    format: (format === 'gst') ? 'Standard GST Invoice' : (format === 'retail' ? 'Retail Invoice' : (format === 'b2b' ? 'B2B Tax Invoice' : 'Proforma Invoice'))
+    format: format === 'gst'
+      ? 'Standard GST Invoice'
+      : (format === 'retail'
+        ? 'Retail Invoice'
+        : (format === 'b2b'
+          ? 'B2B Tax Invoice'
+          : (format === 'challan' ? 'Delivery Challan' : 'Proforma Invoice')))
   });
   data.invoiceCounter = Math.max(data.invoiceCounter || 1, getInvoiceNumberValue(invNo) + 1);
 
@@ -2950,7 +3006,8 @@ function getBillHTML(format, invNo, date, cust, gstin, payment, subtotal, cgst, 
     const amt = item.qty * item.price;
     const gstAmt = amt * item.gst / 100;
 
-    if (isChallan) {
+    if (format === 'challan') {
+
       return `<tr>
         <td style="padding:8px;border-bottom:1px solid #eee;">${item.name}</td>
         <td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">${item.hsn||'—'}</td>
@@ -2982,8 +3039,10 @@ function getBillHTML(format, invNo, date, cust, gstin, payment, subtotal, cgst, 
   const label = headers[format] || 'TAX INVOICE';
   const accentColor = format === 'proforma' ? '#6c63ff' : format === 'b2b' ? '#1a73e8' : format === 'retail' ? '#e67e22' : format === 'challan' ? '#0ea5e9' : '#1a5f3a';
 
-  const isChallan = format === 'challan';
-  const challanOnlyColumns = isChallan;
+  const isChallan = format === 'challan'; // used only inside getBillHTML
+
+
+
 
 
   return `<div class="bill-preview">
@@ -3020,9 +3079,9 @@ function getBillHTML(format, invNo, date, cust, gstin, payment, subtotal, cgst, 
           <th style="padding:10px 8px;text-align:center;font-size:11px;color:#444;">HSN</th>
           <th style="padding:10px 8px;text-align:center;font-size:11px;color:#444;">Qty</th>
           <th style="padding:10px 8px;text-align:right;font-size:11px;color:#444;">Rate</th>
-          ${isChallan ? '' : `<th style="padding:10px 8px;text-align:center;font-size:11px;color:#444;">GST%</th>`}
-          ${isChallan ? '' : `<th style="padding:10px 8px;text-align:right;font-size:11px;color:#444;">Tax Amt</th>`}
-          <th style="padding:10px 8px;text-align:right;font-size:11px;color:#444;">${isChallan ? 'Amount' : 'Total'}</th>
+        ${format === 'challan' ? '' : `<th style="padding:10px 8px;text-align:center;font-size:11px;color:#444;">GST%</th>`}
+          ${format === 'challan' ? '' : `<th style="padding:10px 8px;text-align:right;font-size:11px;color:#444;">Tax Amt</th>`}
+          <th style="padding:10px 8px;text-align:right;font-size:11px;color:#444;">${format === 'challan' ? 'Amount' : 'Total'}</th>
         </tr>
       </thead>
       <tbody>${itemRows}</tbody>
