@@ -1,5 +1,5 @@
-- [ ] Fix Edge Function CORS + duplicate Deno.serve
-- [ ] Redeploy Edge Function in Supabase
-- [ ] Reload app and test “Generate & Preview”
-- [ ] If still failing, inspect Supabase Edge logs and confirm function URL + name
-
+- [ ] Create a new Supabase project
+- [ ] Run `supabase-schema.sql` in the Supabase SQL editor
+- [ ] Enable Email auth in Supabase Authentication settings
+- [ ] Open `index.html` and save the Project URL + anon public key
+- [ ] Create an account and test product, stock, customer, and invoice flows

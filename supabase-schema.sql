@@ -1,498 +1,471 @@
--- Supabase schema for multi-tenant GST Business Manager (SmartBuzz Pro)
+-- SmartBuzz fresh Supabase schema
+-- Run this in a new Supabase project's SQL editor.
+-- No Edge Functions are required. Transaction-sensitive actions are handled
+-- by Postgres RPC functions: receive_stock() and create_invoice().
 
--- =========================
--- Extensions
--- =========================
 create extension if not exists pgcrypto;
 
 -- =========================
--- Helper Function
+-- Helpers
 -- =========================
 create or replace function public.set_user_id()
 returns trigger
 language plpgsql
+security definer
+set search_path = public
 as $$
 begin
   if new.user_id is null then
     new.user_id := auth.uid();
   end if;
+  return new;
+end;
+$$;
 
+create or replace function public.touch_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at := now();
   return new;
 end;
 $$;
 
 -- =========================
--- business_profiles
+-- Core tables
 -- =========================
 create table if not exists public.business_profiles (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null,
-  name text not null default '',
-  gstin text not null default '',
-  address text not null default '',
-  phone text not null default '',
-  email text not null default '',
-  state text not null default '',
-  state_code text not null default '',
+  user_id uuid not null unique,
+  name text not null default 'My Business',
+  gstin text,
+  phone text,
+  email text,
+  address text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
-create unique index if not exists business_profiles_user_id_unique_idx
-on public.business_profiles(user_id);
+create table if not exists public.business_settings (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null unique,
+  low_stock_threshold integer not null default 10 check (low_stock_threshold > 0),
+  default_gst numeric(5,2) not null default 12 check (default_gst >= 0),
+  default_unit text not null default 'pcs',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
 
--- Drop existing trigger safely
-drop trigger if exists set_business_profiles_user_id
-on public.business_profiles;
-
-create trigger set_business_profiles_user_id
-before insert on public.business_profiles
-for each row
-execute function public.set_user_id();
-
--- =========================
--- products
--- =========================
 create table if not exists public.products (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null,
   name text not null,
-  sku text not null,
+  sku text,
   category text not null default 'General',
-  mrp numeric(12,2) not null default 0,
-  price numeric(12,2) not null default 0,
-  purchase numeric(12,2) not null default 0,
-  stock integer not null default 0,
-  gst smallint not null default 12,
-  hsn text,
-  expiry date,
-  manufacturer text,
   unit text not null default 'pcs',
+  stock_qty integer not null default 0 check (stock_qty >= 0),
+  selling_price numeric(12,2) not null default 0 check (selling_price >= 0),
+  purchase_price numeric(12,2) not null default 0 check (purchase_price >= 0),
+  mrp numeric(12,2) not null default 0 check (mrp >= 0),
+  gst_rate numeric(5,2) not null default 12 check (gst_rate >= 0),
+  hsn text,
+  expiry_date date,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  variants jsonb not null default '[]'::jsonb,
   unique(user_id, sku)
-
 );
 
--- Existing Supabase projects created before variants were added need this migration.
-alter table public.products
-add column if not exists variants jsonb not null default '[]'::jsonb;
-
-alter table public.products
-alter column variants set default '[]'::jsonb;
-
-update public.products
-set variants = '[]'::jsonb
-where variants is null;
-
-alter table public.products
-alter column variants set not null;
-
--- Drop existing trigger safely
-drop trigger if exists set_products_user_id
-on public.products;
-
-create trigger set_products_user_id
-before insert on public.products
-for each row
-execute function public.set_user_id();
-
--- =========================
--- stock_entries
--- =========================
-create table if not exists public.stock_entries (
+create table if not exists public.product_variants (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null,
   product_id uuid not null references public.products(id) on delete cascade,
-  variant_index integer,
-  variant_name text,
-  quantity integer not null check (quantity > 0),
-  source text not null default '',
-  received_date date not null,
-  notes text,
-  added_by text,
-  created_at timestamptz not null default now()
+  name text not null,
+  stock_qty integer not null default 0 check (stock_qty >= 0),
+  selling_price numeric(12,2) not null default 0 check (selling_price >= 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(product_id, name)
 );
 
-drop trigger if exists set_stock_entries_user_id
-on public.stock_entries;
-
-create trigger set_stock_entries_user_id
-before insert on public.stock_entries
-for each row
-execute function public.set_user_id();
-
--- =========================
--- customers
--- =========================
 create table if not exists public.customers (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null,
   name text not null,
-  phone text not null,
+  phone text,
   email text,
   gstin text,
-  city text,
   address text,
-  purchases uuid[] not null default '{}',
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  unique(user_id, phone)
-);
-
-drop trigger if exists set_customers_user_id
-on public.customers;
-
-create trigger set_customers_user_id
-before insert on public.customers
-for each row
-execute function public.set_user_id();
-
--- =========================
--- sales
--- =========================
-create table if not exists public.sales (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null,
-  inv_no text not null,
-  customer_id uuid,
-  items jsonb not null default '[]'::jsonb,
-  subtotal numeric(12,2) not null default 0,
-  gst numeric(12,2) not null default 0,
-  total numeric(12,2) not null default 0,
-  sale_date date not null,
-  payment_mode text not null default 'Cash',
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  unique(user_id, inv_no)
-);
-
--- Existing Supabase projects created before the billing flow was finalized
--- need these migrations because create table if not exists does not add columns.
-alter table public.sales
-add column if not exists inv_no text,
-add column if not exists customer_id uuid,
-add column if not exists items jsonb not null default '[]'::jsonb,
-add column if not exists subtotal numeric(12,2) not null default 0,
-add column if not exists gst numeric(12,2) not null default 0,
-add column if not exists total numeric(12,2) not null default 0,
-add column if not exists sale_date date not null default current_date,
-add column if not exists payment_mode text not null default 'Cash',
-add column if not exists updated_at timestamptz not null default now();
-
-create unique index if not exists sales_user_inv_no_unique_idx
-on public.sales(user_id, inv_no);
-
-drop trigger if exists set_sales_user_id
-on public.sales;
-
-create trigger set_sales_user_id
-before insert on public.sales
-for each row
-execute function public.set_user_id();
-
--- =========================
--- bills
--- =========================
-create table if not exists public.bills (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null,
-  inv_no text not null,
-  customer_id uuid,
-  amount numeric(12,2) not null default 0,
-  bill_date date not null,
-  format text not null default 'Standard GST Invoice',
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  unique(user_id, inv_no)
-);
-
-alter table public.bills
-add column if not exists inv_no text,
-add column if not exists customer_id uuid,
-add column if not exists amount numeric(12,2) not null default 0,
-add column if not exists bill_date date not null default current_date,
-add column if not exists format text not null default 'Standard GST Invoice',
-add column if not exists updated_at timestamptz not null default now();
-
-create unique index if not exists bills_user_inv_no_unique_idx
-on public.bills(user_id, inv_no);
-
-drop trigger if exists set_bills_user_id
-on public.bills;
-
-create trigger set_bills_user_id
-before insert on public.bills
-for each row
-execute function public.set_user_id();
-
--- =========================
--- wa_log
--- =========================
-create table if not exists public.wa_log (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null,
-  customer text,
-  phone text,
-  product text,
-  time text,
-  url text,
-  created_at timestamptz not null default now()
-);
-
-drop trigger if exists set_wa_log_user_id
-on public.wa_log;
-
-create trigger set_wa_log_user_id
-before insert on public.wa_log
-for each row
-execute function public.set_user_id();
-
--- =========================
--- invoice_counters
--- =========================
-create table if not exists public.invoice_counters (
-  user_id uuid primary key,
-  counter integer not null default 1,
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.stock_movements (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null,
+  product_id uuid not null references public.products(id) on delete cascade,
+  variant_id uuid references public.product_variants(id) on delete set null,
+  movement_type text not null check (movement_type in ('receive', 'sale', 'adjustment')),
+  quantity integer not null check (quantity > 0),
+  source text,
+  notes text,
+  received_date date not null default current_date,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.invoice_counters (
+  user_id uuid primary key,
+  next_number integer not null default 1 check (next_number > 0),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.invoices (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null,
+  invoice_seq integer not null,
+  invoice_no text not null,
+  customer_id uuid references public.customers(id) on delete set null,
+  invoice_date date not null default current_date,
+  invoice_type text not null default 'tax_invoice',
+  payment_mode text not null default 'Cash',
+  subtotal numeric(12,2) not null default 0,
+  gst_total numeric(12,2) not null default 0,
+  total numeric(12,2) not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(user_id, invoice_seq),
+  unique(user_id, invoice_no)
+);
+
+create table if not exists public.invoice_items (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null,
+  invoice_id uuid not null references public.invoices(id) on delete cascade,
+  product_id uuid not null references public.products(id),
+  variant_id uuid references public.product_variants(id),
+  product_name text not null,
+  variant_name text,
+  hsn text,
+  quantity integer not null check (quantity > 0),
+  unit_price numeric(12,2) not null check (unit_price >= 0),
+  gst_rate numeric(5,2) not null default 0 check (gst_rate >= 0),
+  line_subtotal numeric(12,2) not null,
+  line_gst numeric(12,2) not null,
+  line_total numeric(12,2) not null,
+  created_at timestamptz not null default now()
+);
+
 -- =========================
--- Enable RLS
+-- Triggers
+-- =========================
+do $$
+declare
+  t text;
+begin
+  foreach t in array array[
+    'business_profiles',
+    'business_settings',
+    'products',
+    'product_variants',
+    'customers',
+    'stock_movements',
+    'invoices',
+    'invoice_items'
+  ] loop
+    execute format('drop trigger if exists set_%I_user_id on public.%I', t, t);
+    execute format('create trigger set_%I_user_id before insert on public.%I for each row execute function public.set_user_id()', t, t);
+  end loop;
+
+  foreach t in array array[
+    'business_profiles',
+    'business_settings',
+    'products',
+    'product_variants',
+    'customers',
+    'invoices'
+  ] loop
+    execute format('drop trigger if exists touch_%I_updated_at on public.%I', t, t);
+    execute format('create trigger touch_%I_updated_at before update on public.%I for each row execute function public.touch_updated_at()', t, t);
+  end loop;
+end $$;
+
+-- =========================
+-- RLS
 -- =========================
 alter table public.business_profiles enable row level security;
+alter table public.business_settings enable row level security;
 alter table public.products enable row level security;
-alter table public.stock_entries enable row level security;
+alter table public.product_variants enable row level security;
 alter table public.customers enable row level security;
-alter table public.sales enable row level security;
-alter table public.bills enable row level security;
-alter table public.wa_log enable row level security;
+alter table public.stock_movements enable row level security;
+alter table public.invoice_counters enable row level security;
+alter table public.invoices enable row level security;
+alter table public.invoice_items enable row level security;
 
--- =========================
--- Remove old policies safely
--- =========================
+do $$
+declare
+  t text;
+begin
+  foreach t in array array[
+    'business_profiles',
+    'business_settings',
+    'products',
+    'product_variants',
+    'customers',
+    'stock_movements',
+    'invoices',
+    'invoice_items'
+  ] loop
+    execute format('drop policy if exists %I on public.%I', t || '_select_own', t);
+    execute format('drop policy if exists %I on public.%I', t || '_insert_own', t);
+    execute format('drop policy if exists %I on public.%I', t || '_update_own', t);
+    execute format('drop policy if exists %I on public.%I', t || '_delete_own', t);
+    execute format('create policy %I on public.%I for select using (user_id = auth.uid())', t || '_select_own', t);
+    execute format('create policy %I on public.%I for insert with check (user_id = auth.uid())', t || '_insert_own', t);
+    execute format('create policy %I on public.%I for update using (user_id = auth.uid()) with check (user_id = auth.uid())', t || '_update_own', t);
+    execute format('create policy %I on public.%I for delete using (user_id = auth.uid())', t || '_delete_own', t);
+  end loop;
+end $$;
 
--- business_profiles
-drop policy if exists "bp_read_own" on public.business_profiles;
-drop policy if exists "bp_write_own" on public.business_profiles;
-drop policy if exists "bp_update_own" on public.business_profiles;
-
--- products
-drop policy if exists "products_read_own" on public.products;
-drop policy if exists "products_insert_own" on public.products;
-drop policy if exists "products_update_own" on public.products;
-drop policy if exists "products_delete_own" on public.products;
-
--- stock_entries
-drop policy if exists "stock_entries_read_own" on public.stock_entries;
-drop policy if exists "stock_entries_insert_own" on public.stock_entries;
-drop policy if exists "stock_entries_update_own" on public.stock_entries;
-drop policy if exists "stock_entries_delete_own" on public.stock_entries;
-
--- customers
-drop policy if exists "customers_read_own" on public.customers;
-drop policy if exists "customers_insert_own" on public.customers;
-drop policy if exists "customers_update_own" on public.customers;
-drop policy if exists "customers_delete_own" on public.customers;
-
--- sales
-drop policy if exists "sales_read_own" on public.sales;
-drop policy if exists "sales_insert_own" on public.sales;
-drop policy if exists "sales_update_own" on public.sales;
-drop policy if exists "sales_delete_own" on public.sales;
-
--- bills
-drop policy if exists "bills_read_own" on public.bills;
-drop policy if exists "bills_insert_own" on public.bills;
-drop policy if exists "bills_update_own" on public.bills;
-drop policy if exists "bills_delete_own" on public.bills;
-
--- wa_log
-drop policy if exists "wa_read_own" on public.wa_log;
-drop policy if exists "wa_insert_own" on public.wa_log;
-drop policy if exists "wa_delete_own" on public.wa_log;
-
--- =========================
--- business_profiles policies
--- =========================
-create policy "bp_read_own"
-on public.business_profiles
-for select
-using (user_id = auth.uid());
-
-create policy "bp_write_own"
-on public.business_profiles
-for insert
-with check (user_id = auth.uid());
-
-create policy "bp_update_own"
-on public.business_profiles
-for update
-using (user_id = auth.uid())
-with check (user_id = auth.uid());
-
--- =========================
--- products policies
--- =========================
-create policy "products_read_own"
-on public.products
-for select
-using (user_id = auth.uid());
-
-create policy "products_insert_own"
-on public.products
-for insert
-with check (user_id = auth.uid());
-
-create policy "products_update_own"
-on public.products
-for update
-using (user_id = auth.uid())
-with check (user_id = auth.uid());
-
-create policy "products_delete_own"
-on public.products
-for delete
-using (user_id = auth.uid());
-
--- =========================
--- stock_entries policies
--- =========================
-create policy "stock_entries_read_own"
-on public.stock_entries
-for select
-using (user_id = auth.uid());
-
-create policy "stock_entries_insert_own"
-on public.stock_entries
-for insert
-with check (user_id = auth.uid());
-
-create policy "stock_entries_update_own"
-on public.stock_entries
-for update
-using (user_id = auth.uid())
-with check (user_id = auth.uid());
-
-create policy "stock_entries_delete_own"
-on public.stock_entries
-for delete
-using (user_id = auth.uid());
-
--- =========================
--- customers policies
--- =========================
-create policy "customers_read_own"
-on public.customers
-for select
-using (user_id = auth.uid());
-
-create policy "customers_insert_own"
-on public.customers
-for insert
-with check (user_id = auth.uid());
-
-create policy "customers_update_own"
-on public.customers
-for update
-using (user_id = auth.uid())
-with check (user_id = auth.uid());
-
-create policy "customers_delete_own"
-on public.customers
-for delete
-using (user_id = auth.uid());
-
--- =========================
--- sales policies
--- =========================
-create policy "sales_read_own"
-on public.sales
-for select
-using (user_id = auth.uid());
-
-create policy "sales_insert_own"
-on public.sales
-for insert
-with check (user_id = auth.uid());
-
-create policy "sales_update_own"
-on public.sales
-for update
-using (user_id = auth.uid())
-with check (user_id = auth.uid());
-
-create policy "sales_delete_own"
-on public.sales
-for delete
-using (user_id = auth.uid());
-
--- =========================
--- bills policies
--- =========================
-create policy "bills_read_own"
-on public.bills
-for select
-using (user_id = auth.uid());
-
-create policy "bills_insert_own"
-on public.bills
-for insert
-with check (user_id = auth.uid());
-
-create policy "bills_update_own"
-on public.bills
-for update
-using (user_id = auth.uid())
-with check (user_id = auth.uid());
-
-create policy "bills_delete_own"
-on public.bills
-for delete
-using (user_id = auth.uid());
-
--- =========================
--- wa_log policies
--- =========================
-create policy "wa_read_own"
-on public.wa_log
-for select
-using (user_id = auth.uid());
-
-create policy "wa_insert_own"
-on public.wa_log
-for insert
-with check (user_id = auth.uid());
-
-create policy "wa_delete_own"
-on public.wa_log
-for delete
-using (user_id = auth.uid());
+drop policy if exists invoice_counters_select_own on public.invoice_counters;
+drop policy if exists invoice_counters_insert_own on public.invoice_counters;
+drop policy if exists invoice_counters_update_own on public.invoice_counters;
+create policy invoice_counters_select_own on public.invoice_counters for select using (user_id = auth.uid());
+create policy invoice_counters_insert_own on public.invoice_counters for insert with check (user_id = auth.uid());
+create policy invoice_counters_update_own on public.invoice_counters for update using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 -- =========================
 -- Indexes
 -- =========================
-create index if not exists products_user_stock_idx
-on public.products(user_id, stock);
+create index if not exists products_user_category_idx on public.products(user_id, category);
+create index if not exists variants_product_idx on public.product_variants(product_id);
+create index if not exists customers_user_name_idx on public.customers(user_id, name);
+create index if not exists stock_user_date_idx on public.stock_movements(user_id, received_date desc);
+create index if not exists invoices_user_date_idx on public.invoices(user_id, invoice_date desc);
+create index if not exists invoice_items_invoice_idx on public.invoice_items(invoice_id);
 
-create index if not exists products_user_expiry_idx
-on public.products(user_id, expiry);
+-- =========================
+-- RPC: receive_stock
+-- =========================
+create or replace function public.receive_stock(
+  p_product_id uuid,
+  p_variant_id uuid,
+  p_quantity integer,
+  p_source text default null,
+  p_notes text default null,
+  p_received_date date default current_date
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user uuid := auth.uid();
+  v_product products%rowtype;
+  v_variant product_variants%rowtype;
+begin
+  if v_user is null then
+    raise exception 'Not authenticated';
+  end if;
+  if p_quantity is null or p_quantity <= 0 then
+    raise exception 'Quantity must be greater than zero';
+  end if;
 
-create index if not exists stock_entries_user_date_idx
-on public.stock_entries(user_id, received_date);
+  select * into v_product
+  from public.products
+  where id = p_product_id and user_id = v_user
+  for update;
 
-create index if not exists stock_entries_product_idx
-on public.stock_entries(product_id);
+  if not found then
+    raise exception 'Product not found';
+  end if;
 
-create index if not exists customers_user_phone_idx
-on public.customers(user_id, phone);
+  if p_variant_id is not null then
+    select * into v_variant
+    from public.product_variants
+    where id = p_variant_id and product_id = p_product_id and user_id = v_user
+    for update;
 
-create index if not exists sales_user_date_idx
-on public.sales(user_id, sale_date);
+    if not found then
+      raise exception 'Variant not found';
+    end if;
 
-create index if not exists bills_user_date_idx
-on public.bills(user_id, bill_date);
+    update public.product_variants
+    set stock_qty = stock_qty + p_quantity
+    where id = p_variant_id;
+  end if;
 
--- Refresh PostgREST schema cache after adding columns/policies.
+  update public.products
+  set stock_qty = stock_qty + p_quantity
+  where id = p_product_id;
+
+  insert into public.stock_movements (
+    user_id, product_id, variant_id, movement_type, quantity, source, notes, received_date
+  )
+  values (
+    v_user, p_product_id, p_variant_id, 'receive', p_quantity, nullif(p_source, ''), nullif(p_notes, ''), coalesce(p_received_date, current_date)
+  );
+end;
+$$;
+
+-- =========================
+-- RPC: create_invoice
+-- =========================
+create or replace function public.create_invoice(
+  p_customer_id uuid,
+  p_invoice_date date,
+  p_invoice_type text,
+  p_payment_mode text,
+  p_items jsonb
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user uuid := auth.uid();
+  v_invoice_id uuid;
+  v_seq integer;
+  v_invoice_no text;
+  v_item jsonb;
+  v_product products%rowtype;
+  v_variant product_variants%rowtype;
+  v_product_id uuid;
+  v_variant_id uuid;
+  v_qty integer;
+  v_price numeric(12,2);
+  v_subtotal numeric(12,2) := 0;
+  v_gst numeric(12,2) := 0;
+  v_total numeric(12,2) := 0;
+  v_line_subtotal numeric(12,2);
+  v_line_gst numeric(12,2);
+  v_line_total numeric(12,2);
+begin
+  if v_user is null then
+    raise exception 'Not authenticated';
+  end if;
+  if jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
+    raise exception 'Invoice needs at least one item';
+  end if;
+
+  if p_customer_id is not null and not exists (
+    select 1 from public.customers where id = p_customer_id and user_id = v_user
+  ) then
+    raise exception 'Customer not found';
+  end if;
+
+  insert into public.invoice_counters(user_id, next_number)
+  values (v_user, 2)
+  on conflict (user_id)
+  do update set next_number = public.invoice_counters.next_number + 1,
+                updated_at = now()
+  returning next_number - 1 into v_seq;
+
+  v_invoice_no := 'INV-' || lpad(v_seq::text, 5, '0');
+
+  insert into public.invoices (
+    user_id, invoice_seq, invoice_no, customer_id, invoice_date, invoice_type, payment_mode
+  )
+  values (
+    v_user, v_seq, v_invoice_no, p_customer_id, coalesce(p_invoice_date, current_date),
+    coalesce(nullif(p_invoice_type, ''), 'tax_invoice'), coalesce(nullif(p_payment_mode, ''), 'Cash')
+  )
+  returning id into v_invoice_id;
+
+  for v_item in select * from jsonb_array_elements(p_items) loop
+    v_product_id := (v_item ->> 'product_id')::uuid;
+    v_variant_id := nullif(v_item ->> 'variant_id', '')::uuid;
+    v_qty := (v_item ->> 'quantity')::integer;
+    v_price := (v_item ->> 'unit_price')::numeric;
+
+    if v_qty is null or v_qty <= 0 then
+      raise exception 'Invalid item quantity';
+    end if;
+    if v_price is null or v_price < 0 then
+      raise exception 'Invalid item price';
+    end if;
+
+    select * into v_product
+    from public.products
+    where id = v_product_id and user_id = v_user
+    for update;
+
+    if not found then
+      raise exception 'Product not found';
+    end if;
+
+    if v_variant_id is not null then
+      select * into v_variant
+      from public.product_variants
+      where id = v_variant_id and product_id = v_product_id and user_id = v_user
+      for update;
+
+      if not found then
+        raise exception 'Variant not found';
+      end if;
+      if v_variant.stock_qty < v_qty then
+        raise exception 'Insufficient stock for %', v_product.name || ' - ' || v_variant.name;
+      end if;
+
+      update public.product_variants
+      set stock_qty = stock_qty - v_qty
+      where id = v_variant_id;
+    else
+      if v_product.stock_qty < v_qty then
+        raise exception 'Insufficient stock for %', v_product.name;
+      end if;
+    end if;
+
+    update public.products
+    set stock_qty = stock_qty - v_qty
+    where id = v_product_id;
+
+    v_line_subtotal := round(v_qty * v_price, 2);
+    v_line_gst := case
+      when coalesce(p_invoice_type, '') = 'challan' then 0
+      else round(v_line_subtotal * coalesce(v_product.gst_rate, 0) / 100, 2)
+    end;
+    v_line_total := v_line_subtotal + v_line_gst;
+
+    v_subtotal := v_subtotal + v_line_subtotal;
+    v_gst := v_gst + v_line_gst;
+    v_total := v_total + v_line_total;
+
+    insert into public.invoice_items (
+      user_id, invoice_id, product_id, variant_id, product_name, variant_name, hsn,
+      quantity, unit_price, gst_rate, line_subtotal, line_gst, line_total
+    )
+    values (
+      v_user, v_invoice_id, v_product_id, v_variant_id, v_product.name,
+      case when v_variant_id is null then null else v_variant.name end,
+      v_product.hsn, v_qty, v_price, v_product.gst_rate,
+      v_line_subtotal, v_line_gst, v_line_total
+    );
+
+    insert into public.stock_movements (
+      user_id, product_id, variant_id, movement_type, quantity, source, notes, received_date
+    )
+    values (
+      v_user, v_product_id, v_variant_id, 'sale', v_qty, v_invoice_no, 'Invoice sale', coalesce(p_invoice_date, current_date)
+    );
+  end loop;
+
+  update public.invoices
+  set subtotal = v_subtotal,
+      gst_total = v_gst,
+      total = v_total
+  where id = v_invoice_id;
+
+  return v_invoice_id;
+exception
+  when others then
+    raise;
+end;
+$$;
+
+grant execute on function public.receive_stock(uuid, uuid, integer, text, text, date) to authenticated;
+grant execute on function public.create_invoice(uuid, date, text, text, jsonb) to authenticated;
+
 notify pgrst, 'reload schema';

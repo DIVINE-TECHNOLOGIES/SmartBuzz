@@ -525,6 +525,35 @@
   .stock-batch-table input, .stock-batch-table select { min-width: 120px; }
   .file-input-hidden { display: none; }
 
+  .preset-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+  }
+
+  .preset-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px;
+    cursor: pointer;
+    transition: border-color 0.15s, transform 0.15s;
+  }
+  .preset-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .preset-card.active { border-color: var(--accent); background: rgba(108,99,255,0.12); }
+  .preset-card h4 { font-size: 13px; margin-bottom: 6px; }
+  .preset-card p { color: var(--muted); font-size: 12px; line-height: 1.35; }
+
+  .chip-list { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip {
+    border: 1px solid var(--border2);
+    border-radius: 999px;
+    padding: 5px 10px;
+    color: var(--text);
+    background: var(--surface2);
+    font-size: 12px;
+  }
+
   @media print {
     body * { visibility: hidden !important; }
     .bill-preview, .bill-preview *, .report-preview, .report-preview * { visibility: visible !important; }
@@ -625,6 +654,9 @@
     </div>
 
     <div class="nav-section admin-only">Owner</div>
+    <div class="nav-item admin-only" onclick="navigate('business')">
+      <span class="nav-icon">◌</span> Business Setup
+    </div>
     <div class="nav-item admin-only" onclick="navigate('admin')">
       <span class="nav-icon">⚙</span> Admin
     </div>
@@ -679,7 +711,7 @@
       <div class="card">
         <div class="section-head mb-4">
           <h3>⬜ Low Stock Products</h3>
-          <span class="text-muted text-sm">Products with qty below 10</span>
+          <span class="text-muted text-sm" id="low-stock-caption">Products below your alert threshold</span>
         </div>
         <div id="dash-low-stock"></div>
       </div>
@@ -971,6 +1003,70 @@
     </div>
 
     <!-- ADMIN -->
+    <div class="page" id="page-business">
+      <div class="grid-2 gap-4 mb-5">
+        <div class="card">
+          <div class="section-head mb-4">
+            <div>
+              <h3>Business Type</h3>
+              <p>Choose a starter setup for inventory categories, units, and GST defaults.</p>
+            </div>
+          </div>
+          <div class="preset-grid" id="business-presets"></div>
+        </div>
+
+        <div class="card">
+          <h3 style="font-size:14px;font-weight:600;margin-bottom:16px;">Inventory Defaults</h3>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div class="form-group">
+              <label class="form-label">Low Stock Alert Qty</label>
+              <input type="number" id="business-low-stock" min="1" value="10">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Default GST Rate</label>
+              <select id="business-default-gst">
+                <option value="0">0%</option>
+                <option value="5">5%</option>
+                <option value="12">12%</option>
+                <option value="18">18%</option>
+                <option value="28">28%</option>
+              </select>
+            </div>
+            <div class="form-group" style="grid-column:span 2;">
+              <label class="form-label">Default Unit</label>
+              <select id="business-default-unit"></select>
+            </div>
+          </div>
+          <div class="sep"></div>
+          <div class="mb-4">
+            <div class="form-label mb-4">Recommended Categories</div>
+            <div class="chip-list" id="business-category-chips"></div>
+          </div>
+          <div class="mb-4">
+            <div class="form-label mb-4">Recommended Units</div>
+            <div class="chip-list" id="business-unit-chips"></div>
+          </div>
+          <button class="btn btn-primary" onclick="saveBusinessSettingsFromPage()">Save Setup</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-head mb-4">
+          <div>
+            <h3>Universal Inventory Fields</h3>
+            <p>SmartBuzz supports SKU/barcode, purchase and selling price, GST/HSN, expiry, brand, units, and variants such as size, color, batch, model, or pack.</p>
+          </div>
+          <button class="btn btn-outline btn-sm" onclick="navigate('products'); openProductModal()">Add Product</button>
+        </div>
+        <div class="grid-4">
+          <div class="card-sm"><div class="stat-label">Variants</div><div class="mt-3">Size, color, batch, model</div></div>
+          <div class="card-sm"><div class="stat-label">Units</div><div class="mt-3">pcs, kg, litre, box, service</div></div>
+          <div class="card-sm"><div class="stat-label">Compliance</div><div class="mt-3">GST invoices, HSN, tax report</div></div>
+          <div class="card-sm"><div class="stat-label">Alerts</div><div class="mt-3">Low stock and expiry tracking</div></div>
+        </div>
+      </div>
+    </div>
+
     <div class="page" id="page-admin">
       <div class="grid-3 mb-6">
         <div class="stat-card">
@@ -1300,6 +1396,74 @@ const DEFAULT_BUSINESS_INFO = {
   stateCode: ""
 };
 
+const BUSINESS_PRESETS = {
+  general: {
+    label: 'General Store',
+    description: 'Everyday retail products, mixed categories, GST billing.',
+    categories: ['Grocery', 'Personal Care', 'Household', 'Stationery', 'General'],
+    units: ['pcs', 'pack', 'box', 'kg', 'g', 'litre', 'ml'],
+    defaultUnit: 'pcs',
+    defaultGst: 12,
+    lowStockThreshold: 10,
+  },
+  grocery: {
+    label: 'Grocery / FMCG',
+    description: 'Fast-moving items, packs, weights, expiry-sensitive stock.',
+    categories: ['Staples', 'Snacks', 'Beverages', 'Dairy', 'Personal Care', 'Household'],
+    units: ['pcs', 'pack', 'box', 'kg', 'g', 'litre', 'ml'],
+    defaultUnit: 'pack',
+    defaultGst: 5,
+    lowStockThreshold: 15,
+  },
+  pharmacy: {
+    label: 'Pharmacy',
+    description: 'Medicines, batches, expiry, MRP, GST, and HSN tracking.',
+    categories: ['Medicine', 'OTC', 'Wellness', 'Medical Devices', 'Personal Care'],
+    units: ['strip', 'bottle', 'box', 'pcs', 'pack', 'ml', 'g'],
+    defaultUnit: 'strip',
+    defaultGst: 12,
+    lowStockThreshold: 20,
+  },
+  apparel: {
+    label: 'Apparel / Uniforms',
+    description: 'Size, color, brand, fabric, and variant-wise stock.',
+    categories: ['Shirts', 'Trousers', 'Uniforms', 'Accessories', 'Footwear'],
+    units: ['pcs', 'pair', 'set', 'dozen', 'box'],
+    defaultUnit: 'pcs',
+    defaultGst: 5,
+    lowStockThreshold: 8,
+  },
+  electronics: {
+    label: 'Electronics',
+    description: 'Models, accessories, serial-friendly SKUs, and warranties.',
+    categories: ['Mobiles', 'Accessories', 'Computers', 'Appliances', 'Spares'],
+    units: ['pcs', 'box', 'set', 'pack'],
+    defaultUnit: 'pcs',
+    defaultGst: 18,
+    lowStockThreshold: 5,
+  },
+  hardware: {
+    label: 'Hardware / Tools',
+    description: 'Bulk units, spares, tools, materials, and supplier stock.',
+    categories: ['Tools', 'Electrical', 'Plumbing', 'Paint', 'Fasteners', 'Materials'],
+    units: ['pcs', 'box', 'kg', 'g', 'litre', 'm', 'ft'],
+    defaultUnit: 'pcs',
+    defaultGst: 18,
+    lowStockThreshold: 10,
+  },
+  services: {
+    label: 'Services + Stock',
+    description: 'Bill services while tracking consumables and parts.',
+    categories: ['Service', 'Parts', 'Consumables', 'Packages', 'Accessories'],
+    units: ['service', 'hour', 'pcs', 'pack', 'set'],
+    defaultUnit: 'service',
+    defaultGst: 18,
+    lowStockThreshold: 5,
+  },
+};
+
+const BASE_UNITS = ['pcs', 'kg', 'g', 'litre', 'ml', 'box', 'pack', 'dozen', 'pair', 'set', 'strip', 'bottle', 'm', 'ft', 'hour', 'service'];
+
 let data = {
 
   products: [],
@@ -1311,7 +1475,13 @@ let data = {
   invoiceCounter: 1,
   classifications: [],
   businessProfileId: null,
-  businessInfo: { ...DEFAULT_BUSINESS_INFO }
+  businessInfo: { ...DEFAULT_BUSINESS_INFO },
+  businessSettings: {
+    type: 'general',
+    lowStockThreshold: 10,
+    defaultGst: 12,
+    defaultUnit: 'pcs',
+  }
 };
 
 let billItems = [];
@@ -1378,6 +1548,7 @@ function afterInit() {
   const saleDateEl = document.getElementById('s-date');
   if (saleDateEl) saleDateEl.value = today();
   data.businessInfo = normalizeBusinessInfo(data.businessInfo);
+  data.businessSettings = normalizeBusinessSettings(data.businessSettings);
   syncInvoiceHeaderFields();
   refreshNextInvoiceNumber();
 
@@ -1695,6 +1866,10 @@ async function fetchAllFromSupabase() {
 }
 
 function saveData() {
+  localStorage.setItem('smartbuzz-ui-settings', JSON.stringify({
+    businessSettings: normalizeBusinessSettings(data.businessSettings),
+  }));
+
   // Persist everything to Supabase when enabled.
   // LocalStorage is used only if Supabase is not enabled.
   if (!isSupabaseEnabled()) {
@@ -1717,8 +1892,10 @@ function loadData() {
   return new Promise((resolve) => {
     (async () => {
       try {
+        const uiSettings = JSON.parse(localStorage.getItem('smartbuzz-ui-settings') || '{}');
         if (isSupabaseEnabled()) {
           await fetchAllFromSupabase();
+          data.businessSettings = normalizeBusinessSettings(uiSettings.businessSettings || data.businessSettings);
           resolve(true);
           return;
         }
@@ -1726,7 +1903,9 @@ function loadData() {
         // Fallback for offline/dev mode.
         const d = localStorage.getItem('biztrack');
         if (d) data = { ...data, ...JSON.parse(d) };
+        if (uiSettings.businessSettings) data.businessSettings = uiSettings.businessSettings;
         data.businessInfo = normalizeBusinessInfo(data.businessInfo);
+        data.businessSettings = normalizeBusinessSettings(data.businessSettings);
         refreshNextInvoiceNumber();
       } catch (e) {}
       resolve(true);
@@ -1750,6 +1929,7 @@ const pageTitles = {
   expiry: ['Expiry Tracker', 'Monitor product expiry dates'],
   whatsapp: ['WhatsApp Alerts', 'Send expiry notifications via WhatsApp'],
   report: ['Sales Report', 'Generate PDF of all sales for CA/tax filing'],
+  business: ['Business Setup', 'Configure SmartBuzz for your business type'],
   admin: ['Admin', 'Owner controls and user segregation']
 };
 
@@ -1805,6 +1985,7 @@ function renderPage(page) {
   else if (page === 'expiry') renderExpiryPage();
   else if (page === 'whatsapp') renderWAPage();
   else if (page === 'report') renderSalesReportPage();
+  else if (page === 'business') renderBusinessPage();
   else if (page === 'admin') renderAdminPage();
 }
 
@@ -1814,6 +1995,7 @@ function renderAll() {
   populateBillDropdowns();
   populateSaleDropdowns();
   renderStockPage();
+  renderBusinessPage();
   renderAdminPage();
 }
 
@@ -1825,6 +2007,7 @@ function renderDashboard() {
   const totalProducts = data.products.length;
   const expiring = getExpiringProducts();
   const totalGST = data.sales.reduce((s, sale) => s + sale.gst, 0);
+  const lowStockThreshold = getLowStockThreshold();
 
   document.getElementById('dash-stats').innerHTML = `
     <div class="stat-card">
@@ -1835,7 +2018,7 @@ function renderDashboard() {
     <div class="stat-card">
       <div class="stat-label">Products</div>
       <div class="stat-value">${totalProducts}</div>
-      <div class="stat-change text-muted">${data.products.filter(p=>p.stock<10).length} low stock</div>
+      <div class="stat-change text-muted">${data.products.filter(p=>p.stock<lowStockThreshold).length} low stock</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">GST Collected</div>
@@ -1876,7 +2059,10 @@ function renderDashboard() {
   }).join('');
 
   // Low stock
-  const low = data.products.filter(p => p.stock < 10);
+  const criticalLimit = Math.max(2, Math.floor(lowStockThreshold / 3));
+  const low = data.products.filter(p => p.stock < lowStockThreshold);
+  const lowCaption = document.getElementById('low-stock-caption');
+  if (lowCaption) lowCaption.textContent = `Products with qty below ${lowStockThreshold}`;
   document.getElementById('dash-low-stock').innerHTML = low.length ? `
     <div style="display:flex;flex-direction:column;gap:10px;">
       ${low.map(p => `
@@ -1886,9 +2072,9 @@ function renderDashboard() {
             <div class="text-muted text-sm">${p.category}</div>
           </div>
           <div class="progress-bar" style="width:120px;">
-            <div class="progress-fill" style="width:${Math.min(100,p.stock*10)}%;background:${p.stock<=3?'var(--red)':'var(--amber)'};"></div>
+            <div class="progress-fill" style="width:${Math.min(100,(p.stock / lowStockThreshold) * 100)}%;background:${p.stock<=criticalLimit?'var(--red)':'var(--amber)'};"></div>
           </div>
-          <span class="badge ${p.stock<=3?'badge-red':'badge-amber'}">${p.stock} left</span>
+          <span class="badge ${p.stock<=criticalLimit?'badge-red':'badge-amber'}">${p.stock} left</span>
         </div>
       `).join('')}
     </div>
@@ -1901,6 +2087,7 @@ function renderDashboard() {
 function renderProductsTable() {
   const q = (document.getElementById('product-search')?.value || '').toLowerCase();
   const cat = document.getElementById('product-cat-filter')?.value || '';
+  const lowStockThreshold = getLowStockThreshold();
   let prods = data.products.filter(p =>
     (!q || p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q)) &&
     (!cat || p.category === cat)
@@ -1910,7 +2097,7 @@ function renderProductsTable() {
     const expBadge = !p.expiry ? '' : dl <= 7 ? `<span class="badge badge-red">${dl}d</span>` :
       dl <= 30 ? `<span class="badge badge-amber">${dl}d</span>` : `<span class="badge badge-green">${dl}d</span>`;
     const stockBadge = p.stock <= 0 ? '<span class="badge badge-red">Out</span>' :
-      p.stock < 10 ? `<span class="badge badge-amber">${p.stock}</span>` : `<span class="badge badge-green">${p.stock}</span>`;
+      p.stock < lowStockThreshold ? `<span class="badge badge-amber">${p.stock}</span>` : `<span class="badge badge-green">${p.stock}</span>`;
     return `<tr>
       <td><div style="font-weight:500;">${p.name}</div><div class="text-muted text-sm">${p.manufacturer||''}</div></td>
       <td class="num text-muted text-sm">${p.sku}</td>
@@ -1930,11 +2117,19 @@ function renderProductsTable() {
 }
 
 function populateProductDropdowns() {
-  const cats = [...new Set(data.products.map(p => p.category))];
+  const preset = getActivePreset();
+  const cats = [...new Set([...(preset.categories || []), ...data.products.map(p => p.category).filter(Boolean)])];
   const catFilter = document.getElementById('product-cat-filter');
   if (catFilter) catFilter.innerHTML = '<option value="">All Categories</option>' + cats.map(c => `<option>${c}</option>`).join('');
   const catList = document.getElementById('cat-list');
   if (catList) catList.innerHTML = cats.map(c => `<option>${c}</option>`).join('');
+  const unitSel = document.getElementById('p-unit');
+  if (unitSel) {
+    const units = getAvailableUnits();
+    const current = unitSel.value || data.businessSettings?.defaultUnit || preset.defaultUnit || 'pcs';
+    unitSel.innerHTML = units.map(u => `<option value="${escapeHtmlAttr(u)}">${escapeHtml(u)}</option>`).join('');
+    unitSel.value = units.includes(current) ? current : (data.businessSettings?.defaultUnit || 'pcs');
+  }
 
   // Bill product dropdown
   const billSel = document.getElementById('bill-item-select');
@@ -1980,14 +2175,18 @@ function openProductModal(id) {
     document.getElementById('p-hsn').value = p.hsn;
     document.getElementById('p-expiry').value = p.expiry || '';
     document.getElementById('p-manufacturer').value = p.manufacturer || '';
+    populateProductDropdowns();
     document.getElementById('p-unit').value = p.unit;
     setVariantsUI(p.variants || []);
   } else {
+    const preset = getActivePreset();
     document.getElementById('product-modal-title').textContent = 'Add Product';
     document.getElementById('product-edit-id').value = '';
     ['p-name','p-sku','p-category','p-mrp','p-price','p-purchase','p-stock','p-hsn','p-expiry','p-manufacturer'].forEach(id => document.getElementById(id).value = '');
-    document.getElementById('p-gst').value = '12';
-    document.getElementById('p-unit').value = 'pcs';
+    document.getElementById('p-category').placeholder = `e.g. ${(preset.categories || ['General']).slice(0, 3).join(', ')}`;
+    document.getElementById('p-gst').value = String(data.businessSettings?.defaultGst || preset.defaultGst || 12);
+    populateProductDropdowns();
+    document.getElementById('p-unit').value = data.businessSettings?.defaultUnit || preset.defaultUnit || 'pcs';
 
     // Clear variant UI
     clearVariants(false);
@@ -2007,20 +2206,21 @@ async function saveProduct() {
   if (!price) return toast('Selling price is required', 'red');
 
   const editId = document.getElementById('product-edit-id').value;
+  const preset = getActivePreset();
   const product = {
     id: editId || 'p' + Date.now(),
     name,
     sku: document.getElementById('p-sku').value || 'SKU-' + Math.random().toString(36).substr(2,6).toUpperCase(),
-    category: document.getElementById('p-category').value || 'General',
+    category: document.getElementById('p-category').value || (preset.categories?.[0] || 'General'),
     mrp: parseFloat(document.getElementById('p-mrp').value) || price,
     price,
     purchase: parseFloat(document.getElementById('p-purchase').value) || 0,
     stock: parseInt(document.getElementById('p-stock').value) || 0,
-    gst: parseInt(document.getElementById('p-gst').value),
+    gst: parseInt(document.getElementById('p-gst').value) || data.businessSettings?.defaultGst || preset.defaultGst || 12,
     hsn: document.getElementById('p-hsn').value,
     expiry: document.getElementById('p-expiry').value,
     manufacturer: document.getElementById('p-manufacturer').value,
-    unit: document.getElementById('p-unit').value,
+    unit: document.getElementById('p-unit').value || data.businessSettings?.defaultUnit || preset.defaultUnit || 'pcs',
 
     // Variants / Classification
     variants: getVariantsFromUI(),
@@ -2150,14 +2350,15 @@ async function handleProductImport(event) {
 
 function buildProductsFromImportRows(rows) {
   const grouped = new Map();
+  const preset = getActivePreset();
   rows.forEach((row, idx) => {
     const name = getImportValue(row, ['product name', 'product', 'name', 'item name', 'item']).trim();
     const price = toNumber(getImportValue(row, ['selling price', 'sale price', 'price', 'rate']));
     if (!name || price <= 0) return;
 
-    const sku = getImportValue(row, ['sku', 'barcode', 'code', 'product code']).trim() || makeSku(name, idx);
+    const sku = getImportValue(row, ['sku', 'barcode', 'code', 'product code', 'item code']).trim() || makeSku(name, idx);
     const key = sku.toLowerCase();
-    const variantName = getImportValue(row, ['variant', 'variant name', 'classification', 'size', 'color']).trim();
+    const variantName = getImportValue(row, ['variant', 'variant name', 'classification', 'size', 'color', 'batch', 'batch no', 'batch no.']).trim();
     const variantStock = toNumber(getImportValue(row, ['variant stock', 'variant qty', 'variant quantity', 'stock', 'qty', 'quantity']));
     const variantPrice = toNumber(getImportValue(row, ['variant price', 'variant selling price', 'selling price', 'sale price', 'price', 'rate'])) || price;
 
@@ -2166,16 +2367,16 @@ function buildProductsFromImportRows(rows) {
         id: 'p' + Date.now() + Math.random().toString(16).slice(2),
         name,
         sku,
-        category: getImportValue(row, ['category', 'type']).trim() || 'General',
+        category: getImportValue(row, ['category', 'type', 'item group', 'group']).trim() || preset.categories?.[0] || 'General',
         mrp: toNumber(getImportValue(row, ['mrp', 'm.r.p'])) || price,
         price,
         purchase: toNumber(getImportValue(row, ['purchase', 'purchase price', 'cost'])),
         stock: 0,
-        gst: parseInt(getImportValue(row, ['gst', 'gst rate', 'tax', 'tax rate'])) || 12,
+        gst: parseInt(getImportValue(row, ['gst', 'gst rate', 'tax', 'tax rate'])) || data.businessSettings?.defaultGst || preset.defaultGst || 12,
         hsn: getImportValue(row, ['hsn', 'hsn code']).trim(),
         expiry: normalizeImportDate(getImportValue(row, ['expiry', 'expiry date', 'exp date'])),
         manufacturer: getImportValue(row, ['manufacturer', 'brand', 'company']).trim(),
-        unit: getImportValue(row, ['unit', 'uom']).trim() || 'pcs',
+        unit: getImportValue(row, ['unit', 'uom']).trim() || data.businessSettings?.defaultUnit || preset.defaultUnit || 'pcs',
         variants: [],
       });
     }
@@ -3345,6 +3546,101 @@ function generateSalesReport() {
   updateReportStats();
   // Uses browser print (Save as PDF)
   window.print();
+}
+
+// =========================================================
+// BUSINESS SETUP
+// =========================================================
+function normalizeBusinessSettings(settings = {}) {
+  const type = BUSINESS_PRESETS[settings?.type] ? settings.type : 'general';
+  const preset = BUSINESS_PRESETS[type];
+  return {
+    type,
+    lowStockThreshold: Number(settings?.lowStockThreshold) || preset.lowStockThreshold || 10,
+    defaultGst: Number(settings?.defaultGst) || preset.defaultGst || 12,
+    defaultUnit: settings?.defaultUnit || preset.defaultUnit || 'pcs',
+  };
+}
+
+function getActivePreset() {
+  const settings = normalizeBusinessSettings(data.businessSettings);
+  return BUSINESS_PRESETS[settings.type] || BUSINESS_PRESETS.general;
+}
+
+function getAvailableUnits() {
+  const preset = getActivePreset();
+  return [...new Set([...(preset.units || []), ...BASE_UNITS, ...data.products.map(p => p.unit).filter(Boolean)])];
+}
+
+function getLowStockThreshold() {
+  data.businessSettings = normalizeBusinessSettings(data.businessSettings);
+  return Number(data.businessSettings.lowStockThreshold) || 10;
+}
+
+function setBusinessType(type) {
+  if (!BUSINESS_PRESETS[type]) return;
+  const preset = BUSINESS_PRESETS[type];
+  data.businessSettings = {
+    type,
+    lowStockThreshold: preset.lowStockThreshold,
+    defaultGst: preset.defaultGst,
+    defaultUnit: preset.defaultUnit,
+  };
+  saveData();
+  renderBusinessPage();
+  populateProductDropdowns();
+  renderDashboard();
+  toast(`${preset.label} setup applied`, 'green');
+}
+
+function renderBusinessPage() {
+  const page = document.getElementById('page-business');
+  if (!page || !isAdmin()) return;
+  data.businessSettings = normalizeBusinessSettings(data.businessSettings);
+  const settings = data.businessSettings;
+  const preset = getActivePreset();
+
+  const presetsEl = document.getElementById('business-presets');
+  if (presetsEl) {
+    presetsEl.innerHTML = Object.entries(BUSINESS_PRESETS).map(([key, p]) => `
+      <div class="preset-card ${settings.type === key ? 'active' : ''}" onclick="setBusinessType('${key}')">
+        <h4>${escapeHtml(p.label)}</h4>
+        <p>${escapeHtml(p.description)}</p>
+      </div>
+    `).join('');
+  }
+
+  const lowEl = document.getElementById('business-low-stock');
+  const gstEl = document.getElementById('business-default-gst');
+  const unitEl = document.getElementById('business-default-unit');
+  if (lowEl) lowEl.value = settings.lowStockThreshold;
+  if (gstEl) gstEl.value = String(settings.defaultGst);
+  if (unitEl) {
+    const units = getAvailableUnits();
+    unitEl.innerHTML = units.map(u => `<option value="${escapeHtmlAttr(u)}">${escapeHtml(u)}</option>`).join('');
+    unitEl.value = units.includes(settings.defaultUnit) ? settings.defaultUnit : preset.defaultUnit;
+  }
+
+  const catChips = document.getElementById('business-category-chips');
+  if (catChips) catChips.innerHTML = (preset.categories || []).map(c => `<span class="chip">${escapeHtml(c)}</span>`).join('');
+  const unitChips = document.getElementById('business-unit-chips');
+  if (unitChips) unitChips.innerHTML = (preset.units || []).map(u => `<span class="chip">${escapeHtml(u)}</span>`).join('');
+}
+
+function saveBusinessSettingsFromPage() {
+  if (!ensureAdmin('Business setup')) return;
+  const current = normalizeBusinessSettings(data.businessSettings);
+  data.businessSettings = {
+    type: current.type,
+    lowStockThreshold: parseInt(document.getElementById('business-low-stock')?.value || '') || current.lowStockThreshold,
+    defaultGst: parseInt(document.getElementById('business-default-gst')?.value || '') || current.defaultGst,
+    defaultUnit: document.getElementById('business-default-unit')?.value || current.defaultUnit,
+  };
+  saveData();
+  populateProductDropdowns();
+  renderDashboard();
+  renderProductsTable();
+  toast('Business setup saved', 'green');
 }
 
 function viewBillByInv(invNo) {
