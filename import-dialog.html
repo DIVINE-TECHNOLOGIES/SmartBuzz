@@ -1,0 +1,274 @@
+<!-- Import Products Dialog -->
+<dialog id="import-dialog" class="dialog">
+  <form method="dialog" class="dialog-card">
+    <div class="panel-head">
+      <h3>Import Products from Excel</h3>
+      <button class="icon-btn" value="cancel" type="submit">x</button>
+    </div>
+
+    <!-- File Upload Section -->
+    <div id="import-step-upload" class="import-section active">
+      <p class="hint">Upload a CSV or Excel file with product details. Required columns: <strong>name</strong>, <strong>selling_price</strong></p>
+      
+      <div class="import-file-zone" id="import-file-zone">
+        <input type="file" id="import-file-input" accept=".csv,.xlsx,.xls,.txt" class="hidden">
+        <div class="file-zone-content">
+          <p>📁 Drag and drop your file here</p>
+          <p class="muted">or</p>
+          <button type="button" class="btn ghost" id="import-file-browse">Browse files</button>
+        </div>
+        <p class="muted" style="font-size: 0.85em; margin-top: 0.5rem;">Supports: CSV, XLSX, XLS (max 5MB)</p>
+      </div>
+
+      <div id="import-file-info" class="import-file-info hidden">
+        <p><strong id="import-file-name"></strong> - <span id="import-file-size"></span></p>
+        <button type="button" class="btn ghost" id="import-file-change">Change file</button>
+      </div>
+
+      <div class="form-grid" style="margin-top: 1rem;">
+        <label>
+          <input type="checkbox" id="import-skip-errors" checked>
+          Skip rows with errors (continue importing valid rows)
+        </label>
+      </div>
+
+      <div class="action-row" style="margin-top: 1.5rem;">
+        <button class="btn ghost" value="cancel" type="submit">Cancel</button>
+        <button id="import-preview-btn" class="btn primary" type="button" disabled>Preview & Validate</button>
+      </div>
+    </div>
+
+    <!-- Validation Preview Section -->
+    <div id="import-step-preview" class="import-section hidden">
+      <p class="hint">Review the import preview. <strong id="preview-count"></strong></p>
+      
+      <div class="import-preview-stats">
+        <div class="stat-pill success"><strong id="preview-success">0</strong> Valid</div>
+        <div class="stat-pill error"><strong id="preview-error">0</strong> Errors</div>
+        <div class="stat-pill info"><strong id="preview-warnings">0</strong> Warnings</div>
+      </div>
+
+      <div class="import-validation-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Row</th>
+              <th>Product</th>
+              <th>Status</th>
+              <th>Messages</th>
+            </tr>
+          </thead>
+          <tbody id="import-validation-list"></tbody>
+        </table>
+      </div>
+
+      <div class="action-row">
+        <button type="button" class="btn ghost" id="import-back-btn">Back</button>
+        <button type="button" class="btn primary" id="import-confirm-btn">Import Products</button>
+      </div>
+    </div>
+
+    <!-- Import Progress Section -->
+    <div id="import-step-progress" class="import-section hidden">
+      <p class="hint">Importing products...</p>
+      
+      <div class="import-progress-bar">
+        <progress id="import-progress" value="0" max="100"></progress>
+        <span id="import-progress-text">0%</span>
+      </div>
+
+      <div class="import-progress-stats">
+        <p><span id="import-current">0</span> / <span id="import-total">0</span> imported</p>
+      </div>
+
+      <div id="import-current-item" class="muted" style="margin-top: 1rem; font-size: 0.9em;"></div>
+    </div>
+
+    <!-- Results Section -->
+    <div id="import-step-results" class="import-section hidden">
+      <div class="import-results-summary">
+        <p><strong id="result-summary"></strong></p>
+        <div class="import-results-stats">
+          <div class="stat-pill success"><strong id="result-success">0</strong> Imported</div>
+          <div class="stat-pill error"><strong id="result-failed">0</strong> Failed</div>
+        </div>
+      </div>
+
+      <div id="import-results-list" class="import-results-table hidden">
+        <h4>Import Results</h4>
+        <table>
+          <thead>
+            <tr><th>Product</th><th>Status</th><th>Details</th></tr>
+          </thead>
+          <tbody id="import-results-rows"></tbody>
+        </table>
+      </div>
+
+      <div class="action-row">
+        <button type="button" class="btn primary" id="import-close-btn">Close</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+<style>
+  .import-section {
+    display: none;
+  }
+  .import-section.active {
+    display: block;
+  }
+
+  .import-file-zone {
+    border: 2px dashed #ccc;
+    border-radius: 8px;
+    padding: 2rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: #fafafa;
+  }
+  .import-file-zone:hover {
+    border-color: #0070f3;
+    background: #f0f7ff;
+  }
+  .import-file-zone.dragover {
+    border-color: #0070f3;
+    background: #f0f7ff;
+  }
+
+  .file-zone-content p {
+    margin: 0.5rem 0;
+  }
+
+  .import-file-info {
+    background: #f0f7ff;
+    border: 1px solid #0070f3;
+    border-radius: 6px;
+    padding: 1rem;
+    margin: 1rem 0;
+  }
+  .import-file-info.hidden {
+    display: none;
+  }
+
+  .import-preview-stats,
+  .import-results-stats {
+    display: flex;
+    gap: 1rem;
+    margin: 1rem 0;
+  }
+
+  .stat-pill {
+    flex: 1;
+    padding: 0.75rem;
+    border-radius: 6px;
+    text-align: center;
+    font-size: 0.9em;
+  }
+  .stat-pill.success {
+    background: #ecfdf5;
+    color: #065f46;
+    border: 1px solid #a7f3d0;
+  }
+  .stat-pill.error {
+    background: #fef2f2;
+    color: #991b1b;
+    border: 1px solid #fecaca;
+  }
+  .stat-pill.info {
+    background: #f0f9ff;
+    color: #0c4a6e;
+    border: 1px solid #bae6fd;
+  }
+
+  .import-validation-table,
+  .import-results-table {
+    margin: 1.5rem 0;
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+  }
+
+  .import-validation-table table,
+  .import-results-table table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9em;
+  }
+
+  .import-validation-table th,
+  .import-results-table th {
+    background: #f9fafb;
+    padding: 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid #e5e7eb;
+    font-weight: 600;
+  }
+
+  .import-validation-table td,
+  .import-results-table td {
+    padding: 0.75rem;
+    border-bottom: 1px solid #f3f4f6;
+  }
+
+  .import-validation-table tr:hover,
+  .import-results-table tr:hover {
+    background: #f9fafb;
+  }
+
+  .status-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 12px;
+    font-size: 0.85em;
+    font-weight: 500;
+  }
+  .status-badge.success {
+    background: #ecfdf5;
+    color: #065f46;
+  }
+  .status-badge.error {
+    background: #fef2f2;
+    color: #991b1b;
+  }
+  .status-badge.warning {
+    background: #fffbeb;
+    color: #92400e;
+  }
+
+  .import-progress-bar {
+    margin: 1.5rem 0;
+    position: relative;
+  }
+  .import-progress-bar progress {
+    width: 100%;
+    height: 24px;
+    border-radius: 4px;
+    border: none;
+  }
+  .import-progress-text {
+    position: absolute;
+    right: 0.5rem;
+    top: 2px;
+    font-size: 0.85em;
+    font-weight: 600;
+    color: #374151;
+  }
+
+  .import-results-summary {
+    background: #f9fafb;
+    padding: 1rem;
+    border-radius: 6px;
+    margin-bottom: 1rem;
+  }
+
+  .import-results-table.hidden {
+    display: none;
+  }
+
+  .hidden {
+    display: none !important;
+  }
+</style>
