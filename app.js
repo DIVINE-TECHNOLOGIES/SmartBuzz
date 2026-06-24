@@ -393,8 +393,8 @@ async function saveProduct() {
       expiry_date: $('p-expiry').value || null,
     };
     const { data, error } = id
-      ? await state.client.from('products').update(payload).eq('id', id).select('id').single()
-      : await state.client.from('products').insert(payload).select('id').single();
+      ? await state.client.from('products_import_stg').update(payload).eq('id', id).select('id').single()
+      : await state.client.from('products_import_stg').insert(payload).select('id').single();
     if (error) throw error;
     const productId = data.id;
 
