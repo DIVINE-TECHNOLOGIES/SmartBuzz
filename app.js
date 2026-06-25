@@ -104,6 +104,7 @@ function wireEvents() {
     makeClient({ url, key });
     show('auth-view');
     toast('Supabase connection saved');
+    wireImportEvents();
   });
 
   $('change-config-btn').addEventListener('click', () => {
@@ -138,6 +139,7 @@ function wireEvents() {
   $('refresh-btn').addEventListener('click', refresh);
   $('quick-bill-btn').addEventListener('click', () => navigate('billing'));
   $('add-product-btn').addEventListener('click', openProductDialog);
+$('import-products-btn').addEventListener('click', openImportDialog);
   $('save-product-btn').addEventListener('click', saveProduct);
   $('add-variant-btn').addEventListener('click', () => addVariantRow());
   $('product-search').addEventListener('input', renderProducts);
@@ -290,16 +292,17 @@ function renderProducts() {
       const vars = variantsFor(p.id);
       const variantText = vars.length ? `<div class="muted">${vars.length} variant${vars.length === 1 ? '' : 's'}</div>` : '';
       return `<tr>
-        <td><strong>${esc(p.name)}</strong>${variantText}</td>
-        <td>${esc(p.sku || '')}</td>
-        <td>${esc(p.category || 'General')}</td>
-        <td><span class="pill ${currentStock(p) <= Number(state.settings.low_stock_threshold || 10) ? 'amber' : 'green'}">${currentStock(p)} ${esc(p.unit || 'pcs')}</span></td>
-        <td>₹${money(p.selling_price)}</td>
-        <td>${Number(p.gst_rate || 0)}%</td>
-        <td><button class="text-btn" onclick="editProduct('${p.id}')">Edit</button></td>
-      </tr>`;
+      <td><strong>${esc(p.name)}</strong>${variantText}</td>
+      <td>${esc(p.sku || '')}</td>
+      <td>${esc(p.size || '—')}</td>
+      <td>${esc(p.category || 'General')}</td>
+      <td><span class="pill ${currentStock(p) <= Number(state.settings.low_stock_threshold || 10) ? 'amber' : 'green'}">${currentStock(p)} ${esc(p.unit || 'pcs')}</span></td>
+      <td>₹${money(p.selling_price)}</td>
+      <td>${Number(p.gst_rate || 0)}%</td>
+      <td><button class="text-btn" onclick="editProduct('${p.id}')">Edit</button></td>
+    </tr>`;
     });
-  $('products-table').innerHTML = rows.join('') || emptyRow(7, 'No products yet');
+    $('products-table').innerHTML = rows.join('') || emptyRow(8, 'No products yet');
   populateProductSelects();
 }
 
@@ -332,7 +335,7 @@ function populateBillVariants() {
 function openProductDialog() {
   $('product-dialog-title').textContent = 'Add Product';
   $('product-id').value = '';
-  ['p-name', 'p-sku', 'p-category', 'p-price', 'p-purchase', 'p-mrp', 'p-hsn', 'p-expiry'].forEach((id) => $(id).value = '');
+  ['p-name', 'p-sku', 'p-size', 'p-category', 'p-price', 'p-purchase', 'p-mrp', 'p-hsn', 'p-expiry'].forEach((id) => $(id).value = '');
   $('p-unit').value = state.settings.default_unit || 'pcs';
   $('p-gst').value = state.settings.default_gst || 12;
   $('variant-editor').innerHTML = '';
@@ -346,6 +349,7 @@ window.editProduct = function editProduct(id) {
   $('product-id').value = p.id;
   $('p-name').value = p.name || '';
   $('p-sku').value = p.sku || '';
+  $('p-size').value = p.size || '';
   $('p-category').value = p.category || '';
   $('p-unit').value = p.unit || 'pcs';
   $('p-price').value = p.selling_price || 0;
@@ -383,6 +387,7 @@ async function saveProduct() {
     const payload = {
       name,
       sku: $('p-sku').value.trim() || null,
+      size: $('p-size').value.trim() || null,
       category: $('p-category').value.trim() || 'General',
       unit: $('p-unit').value.trim() || 'pcs',
       selling_price: price,
@@ -393,8 +398,8 @@ async function saveProduct() {
       expiry_date: $('p-expiry').value || null,
     };
     const { data, error } = id
-      ? await state.client.from('products_import_stg').update(payload).eq('id', id).select('id').single()
-      : await state.client.from('products_import_stg').insert(payload).select('id').single();
+    ? await state.client.from('products').update(payload).eq('id', id).select('id').single()
+: await state.client.from('products').insert(payload).select('id').single();
     if (error) throw error;
     const productId = data.id;
 

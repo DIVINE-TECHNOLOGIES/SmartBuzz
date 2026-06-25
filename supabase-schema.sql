@@ -62,6 +62,7 @@ create table if not exists public.products (
   user_id uuid not null,
   name text not null,
   sku text,
+  size text,
   category text not null default 'General',
   unit text not null default 'pcs',
   stock_qty integer not null default 0 check (stock_qty >= 0),
@@ -70,11 +71,11 @@ create table if not exists public.products (
   mrp numeric(12,2) not null default 0 check (mrp >= 0),
   gst_rate numeric(5,2) not null default 12 check (gst_rate >= 0),
   hsn text,
-  expiry_date date,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique(user_id, sku)
 );
+
 
 create table if not exists public.product_variants (
   id uuid primary key default gen_random_uuid(),
