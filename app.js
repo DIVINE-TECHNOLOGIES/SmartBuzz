@@ -67,33 +67,47 @@ function makeClient(config) {
 }
 
 async function boot() {
-  $('stock-date').value = today();
-  $('bill-date').value = today();
-  wireEvents();
-
-  const config = getConfig();
-  if (!config?.url || !config?.key) {
-    $('boot-loader').classList.add('hidden');
-    show('config-view');
-    return;
-  }
-
   try {
-    makeClient(config);
-    const { data } = await state.client.auth.getSession();
-    state.session = data.session || null;
-    $('boot-loader').classList.add('hidden');
-    if (!state.session) {
-      show('auth-view');
+    const bootLoader = $('boot-loader');
+    const cfgView = $('config-view');
+    const authView = $('auth-view');
+
+    // Guard against missing DOM nodes
+    if ($('stock-date')) $('stock-date').value = today();
+    if ($('bill-date')) $('bill-date').value = today();
+    wireEvents();
+
+    const config = getConfig();
+    if (!config?.url || !config?.key) {
+      if (bootLoader) bootLoader.classList.add('hidden');
+      if (cfgView) show('config-view');
       return;
     }
-    await enterApp();
+
+    try {
+      makeClient(config);
+      const { data } = await state.client.auth.getSession();
+      state.session = data.session || null;
+      if (bootLoader) bootLoader.classList.add('hidden');
+      if (!state.session) {
+        if (authView) show('auth-view');
+        return;
+      }
+      await enterApp();
+    } catch (error) {
+      if (bootLoader) bootLoader.classList.add('hidden');
+      if (cfgView) show('config-view');
+      toast(error.message || 'Could not connect to Supabase');
+    }
   } catch (error) {
-    $('boot-loader').classList.add('hidden');
-    show('config-view');
-    toast(error.message || 'Could not connect to Supabase');
+    // Last-resort: ensure we never stay stuck on loader
+    const bootLoader = $('boot-loader');
+    if (bootLoader) bootLoader.classList.add('hidden');
+    if ($('config-view')) show('config-view');
+    toast(error.message || 'App failed to start');
   }
 }
+
 
 function wireEvents() {
   $('save-config-btn').addEventListener('click', () => {
@@ -104,7 +118,6 @@ function wireEvents() {
     makeClient({ url, key });
     show('auth-view');
     toast('Supabase connection saved');
-    wireImportEvents();
   });
 
   $('change-config-btn').addEventListener('click', () => {
@@ -139,7 +152,7 @@ function wireEvents() {
   $('refresh-btn').addEventListener('click', refresh);
   $('quick-bill-btn').addEventListener('click', () => navigate('billing'));
   $('add-product-btn').addEventListener('click', openProductDialog);
-$('import-products-btn').addEventListener('click', openImportDialog);
+  $('import-products-btn').addEventListener('click', openImportDialog);
   $('save-product-btn').addEventListener('click', saveProduct);
   $('add-variant-btn').addEventListener('click', () => addVariantRow());
   $('product-search').addEventListener('input', renderProducts);
@@ -155,6 +168,9 @@ $('import-products-btn').addEventListener('click', openImportDialog);
   $('save-settings-btn').addEventListener('click', saveSettings);
   $('apply-report-btn').addEventListener('click', renderReport);
   $('print-report-btn').addEventListener('click', () => window.print());
+
+  // Import events wired here — single place, always runs
+  wireImportEvents();
 }
 
 async function handleAuth() {
@@ -202,7 +218,7 @@ async function refresh() {
     ] = await Promise.all([
       state.client.from('business_profiles').select('*').maybeSingle(),
       state.client.from('business_settings').select('*').maybeSingle(),
-      state.client.from('products').select('*').order('created_at', { ascending: false }),
+      state.client.from('products').select('*').order('name', { ascending: true }),
       state.client.from('product_variants').select('*').order('created_at', { ascending: true }),
       state.client.from('customers').select('*').order('created_at', { ascending: false }),
       state.client.from('invoices').select('*').order('invoice_date', { ascending: false }).order('created_at', { ascending: false }),
@@ -287,27 +303,32 @@ function renderDashboard() {
 function renderProducts() {
   const q = $('product-search').value.toLowerCase();
   const rows = state.products
-    .filter((p) => !q || [p.name, p.sku, p.category].join(' ').toLowerCase().includes(q))
+    .filter((p) => !q || [p.name, p.sku, p.category, p.size].join(' ').toLowerCase().includes(q))
     .map((p) => {
       const vars = variantsFor(p.id);
       const variantText = vars.length ? `<div class="muted">${vars.length} variant${vars.length === 1 ? '' : 's'}</div>` : '';
+      const stockClass = currentStock(p) <= Number(state.settings.low_stock_threshold || 10) ? 'amber' : 'green';
       return `<tr>
-      <td><strong>${esc(p.name)}</strong>${variantText}</td>
-      <td>${esc(p.sku || '')}</td>
-      <td>${esc(p.size || '—')}</td>
-      <td>${esc(p.category || 'General')}</td>
-      <td><span class="pill ${currentStock(p) <= Number(state.settings.low_stock_threshold || 10) ? 'amber' : 'green'}">${currentStock(p)} ${esc(p.unit || 'pcs')}</span></td>
-      <td>₹${money(p.selling_price)}</td>
-      <td>${Number(p.gst_rate || 0)}%</td>
-      <td><button class="text-btn" onclick="editProduct('${p.id}')">Edit</button></td>
-    </tr>`;
+        <td><strong>${esc(p.name)}</strong>${variantText}</td>
+        <td>${esc(p.sku || '—')}</td>
+        <td>${esc(p.size || '—')}</td>
+        <td>${esc(p.category || 'General')}</td>
+        <td><span class="pill ${stockClass}">${currentStock(p)} ${esc(p.unit || 'pcs')}</span></td>
+        <td>₹${money(p.selling_price)}</td>
+        <td>${Number(p.gst_rate || 0)}%</td>
+        <td><button class="text-btn" onclick="editProduct('${p.id}')">Edit</button></td>
+      </tr>`;
     });
-    $('products-table').innerHTML = rows.join('') || emptyRow(8, 'No products yet');
+  $('products-table').innerHTML = rows.join('') || emptyRow(8, 'No products yet. Add one or import from CSV.');
   populateProductSelects();
 }
 
 function populateProductSelects() {
-  const options = '<option value="">Select product</option>' + state.products.map((p) => `<option value="${p.id}">${esc(p.name)} · Stock ${currentStock(p)}</option>`).join('');
+  const options = '<option value="">Select product</option>' +
+    state.products.map((p) => {
+      const label = p.size ? `${esc(p.name)} (${esc(p.size)}) · Stock ${currentStock(p)}` : `${esc(p.name)} · Stock ${currentStock(p)}`;
+      return `<option value="${p.id}">${label}</option>`;
+    }).join('');
   ['stock-product', 'bill-product'].forEach((id) => {
     const el = $(id);
     const value = el.value;
@@ -370,7 +391,7 @@ function addVariantRow(v = {}) {
     <input class="var-name" placeholder="Variant name" value="${esc(v.name || '')}">
     <input class="var-stock" type="number" min="0" placeholder="Stock" value="${Number(v.stock_qty || 0)}">
     <input class="var-price" type="number" min="0" step="0.01" placeholder="Price" value="${Number(v.selling_price || 0)}">
-    <button class="icon-btn" type="button">x</button>
+    <button class="icon-btn" type="button">✕</button>
     <input class="var-id" type="hidden" value="${esc(v.id || '')}">
   `;
   row.querySelector('button').addEventListener('click', () => row.remove());
@@ -380,7 +401,8 @@ function addVariantRow(v = {}) {
 async function saveProduct() {
   const name = $('p-name').value.trim();
   const price = Number($('p-price').value || 0);
-  if (!name || price <= 0) return toast('Product name and selling price are required');
+  if (!name) return toast('Product name is required');
+  if (price < 0) return toast('Selling price cannot be negative');
   setBusy(true);
   try {
     const id = $('product-id').value || undefined;
@@ -398,8 +420,8 @@ async function saveProduct() {
       expiry_date: $('p-expiry').value || null,
     };
     const { data, error } = id
-    ? await state.client.from('products').update(payload).eq('id', id).select('id').single()
-: await state.client.from('products').insert(payload).select('id').single();
+      ? await state.client.from('products').update(payload).eq('id', id).select('id').single()
+      : await state.client.from('products').insert(payload).select('id').single();
     if (error) throw error;
     const productId = data.id;
 
@@ -444,7 +466,7 @@ async function receiveStock() {
   const productId = $('stock-product').value;
   const variantId = $('stock-variant').value || null;
   const quantity = Number($('stock-qty').value || 0);
-  if (!productId || quantity <= 0) return toast('Select product and quantity');
+  if (!productId || quantity <= 0) return toast('Select product and enter quantity');
   setBusy(true);
   try {
     const { error } = await state.client.rpc('receive_stock', {
@@ -478,7 +500,8 @@ function renderStock() {
 
 function renderBilling() {
   populateProductSelects();
-  $('bill-customer').innerHTML = '<option value="">Walk-in customer</option>' + state.customers.map((c) => `<option value="${c.id}">${esc(c.name)} · ${esc(c.phone || '')}</option>`).join('');
+  $('bill-customer').innerHTML = '<option value="">Walk-in customer</option>' +
+    state.customers.map((c) => `<option value="${c.id}">${esc(c.name)} · ${esc(c.phone || '')}</option>`).join('');
   $('invoice-number').textContent = 'Next invoice will be assigned on save';
   renderBillLines();
 }
@@ -490,19 +513,22 @@ function addBillLine() {
   const qty = Number($('bill-qty').value || 0);
   if (qty <= 0) return toast('Enter quantity');
   const available = variant ? Number(variant.stock_qty || 0) : Number(product.stock_qty || 0);
-  if (qty > available) return toast(`Only ${available} available`);
+  if (qty > available) return toast(`Only ${available} in stock`);
   const price = Number(variant?.selling_price || product.selling_price || 0);
   const existing = state.billLines.find((line) => line.product_id === product.id && (line.variant_id || '') === (variant?.id || ''));
-  if (existing) existing.quantity += qty;
-  else state.billLines.push({
-    product_id: product.id,
-    variant_id: variant?.id || null,
-    name: variant ? `${product.name} - ${variant.name}` : product.name,
-    quantity: qty,
-    unit_price: price,
-    gst_rate: Number(product.gst_rate || 0),
-    hsn: product.hsn || '',
-  });
+  if (existing) {
+    existing.quantity += qty;
+  } else {
+    state.billLines.push({
+      product_id: product.id,
+      variant_id: variant?.id || null,
+      name: variant ? `${product.name} - ${variant.name}` : product.name,
+      quantity: qty,
+      unit_price: price,
+      gst_rate: Number(product.gst_rate || 0),
+      hsn: product.hsn || '',
+    });
+  }
   $('bill-qty').value = 1;
   renderBillLines();
 }
@@ -515,7 +541,14 @@ function renderBillLines() {
     const tax = $('bill-type').value === 'challan' ? 0 : base * line.gst_rate / 100;
     subtotal += base;
     gst += tax;
-    return `<tr><td>${esc(line.name)}</td><td>${line.quantity}</td><td>₹${money(line.unit_price)}</td><td>${line.gst_rate}%</td><td>₹${money(base + tax)}</td><td><button class="text-btn" onclick="removeBillLine(${idx})">Remove</button></td></tr>`;
+    return `<tr>
+      <td>${esc(line.name)}</td>
+      <td>${line.quantity}</td>
+      <td>₹${money(line.unit_price)}</td>
+      <td>${line.gst_rate}%</td>
+      <td>₹${money(base + tax)}</td>
+      <td><button class="text-btn" onclick="removeBillLine(${idx})">Remove</button></td>
+    </tr>`;
   }).join('') || emptyRow(6, 'No items added');
   renderInvoicePreview(subtotal, gst);
 }
@@ -596,7 +629,14 @@ function renderInvoices() {
     .map((inv) => {
       const customer = state.customers.find((c) => c.id === inv.customer_id);
       const count = state.invoiceItems.filter((i) => i.invoice_id === inv.id).length;
-      return `<tr><td><strong>${esc(inv.invoice_no)}</strong></td><td>${esc(customer?.name || 'Walk-in')}</td><td>${esc(inv.invoice_date)}</td><td>${count}</td><td>₹${money(inv.gst_total)}</td><td><strong>₹${money(inv.total)}</strong></td></tr>`;
+      return `<tr>
+        <td><strong>${esc(inv.invoice_no)}</strong></td>
+        <td>${esc(customer?.name || 'Walk-in')}</td>
+        <td>${esc(inv.invoice_date)}</td>
+        <td>${count}</td>
+        <td>₹${money(inv.gst_total)}</td>
+        <td><strong>₹${money(inv.total)}</strong></td>
+      </tr>`;
     });
   $('invoices-table').innerHTML = rows.join('') || emptyRow(6, 'No invoices yet');
 }

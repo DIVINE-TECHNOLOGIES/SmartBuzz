@@ -1,5 +1,7 @@
 // ===========================
-// Excel / CSV Product Import
+// import.js — CSV / Excel product import
+// Depends on: state, $, esc, toast, setBusy, refresh (from app.js)
+//             XLSX (SheetJS CDN)
 // ===========================
 
 const importState = {
@@ -8,13 +10,13 @@ const importState = {
   validRows: [],
 };
 
+// ── Open / close ──────────────────────────────────────────────
+
 function openImportDialog() {
-  // Reset state
   importState.file = null;
   importState.parsedRows = [];
   importState.validRows = [];
 
-  // Reset UI steps
   showImportStep('upload');
   $('import-file-info').classList.add('hidden');
   $('import-file-input').value = '';
@@ -23,28 +25,33 @@ function openImportDialog() {
   $('import-dialog').showModal();
 }
 
+function closeImportDialog() {
+  $('import-dialog').close();
+}
+
 function showImportStep(step) {
   ['upload', 'preview', 'progress', 'results'].forEach((s) => {
-    $(`import-step-${s}`).classList.remove('active');
-    $(`import-step-${s}`).classList.add('hidden');
+    const el = $(`import-step-${s}`);
+    el.classList.remove('active');
+    el.classList.add('hidden');
   });
-  $(`import-step-${step}`).classList.remove('hidden');
-  $(`import-step-${step}`).classList.add('active');
+  const active = $(`import-step-${step}`);
+  active.classList.remove('hidden');
+  active.classList.add('active');
 }
+
+// ── Wire events (called from app.js wireEvents) ───────────────
 
 function wireImportEvents() {
   const fileInput = $('import-file-input');
-  const fileZone = $('import-file-zone');
+  const fileZone  = $('import-file-zone');
 
-  // Browse button
   $('import-file-browse').addEventListener('click', () => fileInput.click());
 
-  // File zone click
   fileZone.addEventListener('click', (e) => {
-    if (e.target !== $('import-file-browse')) fileInput.click();
+    if (e.target.id !== 'import-file-browse') fileInput.click();
   });
 
-  // Drag & drop
   fileZone.addEventListener('dragover', (e) => {
     e.preventDefault();
     fileZone.classList.add('dragover');
@@ -57,41 +64,31 @@ function wireImportEvents() {
     if (file) handleImportFile(file);
   });
 
-  // File input change
   fileInput.addEventListener('change', () => {
     if (fileInput.files[0]) handleImportFile(fileInput.files[0]);
   });
 
-  // Change file button
   $('import-file-change').addEventListener('click', () => {
     importState.file = null;
     $('import-file-info').classList.add('hidden');
-    $('import-file-browse').closest('.file-zone-content') && fileInput.click();
     fileInput.value = '';
     $('import-preview-btn').disabled = true;
   });
 
-  // Preview & Validate button
   $('import-preview-btn').addEventListener('click', runImportValidation);
-
-  // Back button
   $('import-back-btn').addEventListener('click', () => showImportStep('upload'));
-
-  // Confirm import button
   $('import-confirm-btn').addEventListener('click', runImportConfirm);
-
-  // Close results
-  $('import-close-btn').addEventListener('click', () => {
-    $('import-dialog').close();
-  });
+  $('import-cancel-btn').addEventListener('click', closeImportDialog);
+  $('import-close-x-btn').addEventListener('click', closeImportDialog);
+  $('import-done-btn').addEventListener('click', closeImportDialog);
 }
 
+// ── File handling ─────────────────────────────────────────────
+
 function handleImportFile(file) {
-  const allowed = ['text/csv', 'application/vnd.ms-excel',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/plain'];
   const ext = file.name.split('.').pop().toLowerCase();
-  if (!['csv', 'xlsx', 'xls', 'txt'].includes(ext)) {
-    return toast('Unsupported file type. Use CSV or Excel.');
+  if (!['csv', 'xlsx', 'xls'].includes(ext)) {
+    return toast('Unsupported file type. Use CSV or Excel (.xlsx / .xls).');
   }
   if (file.size > 5 * 1024 * 1024) {
     return toast('File too large. Maximum size is 5 MB.');
@@ -114,7 +111,7 @@ function parseImportFile(file) {
         const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
         resolve(rows);
       } catch (err) {
-        reject(err);
+        reject(new Error('Could not parse file: ' + err.message));
       }
     };
     reader.onerror = () => reject(new Error('Could not read file'));
@@ -122,24 +119,25 @@ function parseImportFile(file) {
   });
 }
 
-// Normalise a header key: lowercase, trim, remove spaces/underscores
+// ── Column alias mapping ──────────────────────────────────────
+
 function normKey(k) {
-  return String(k).toLowerCase().trim().replace(/[\s_-]+/g, '_');
+  return String(k).toLowerCase().trim().replace(/[\s_\-]+/g, '_');
 }
 
-// Map common column name aliases to canonical field names
 const FIELD_ALIASES = {
-  name: ['name', 'product_name', 'item_name', 'item', 'product'],
-  selling_price: ['selling_price', 'price', 'sale_price', 'sp', 'rate', 'mrp_price'],
-  sku: ['sku', 'barcode', 'code', 'product_code', 'item_code'],
-  category: ['category', 'cat', 'group', 'department'],
-  unit: ['unit', 'uom', 'unit_of_measure'],
-  purchase_price: ['purchase_price', 'cost', 'cost_price', 'pp', 'buy_price'],
-  mrp: ['mrp', 'maximum_retail_price', 'max_price'],
-  gst_rate: ['gst_rate', 'gst', 'gst_%', 'tax', 'tax_rate'],
-  hsn: ['hsn', 'hsn_code', 'hsn_sac'],
-  stock_qty: ['stock_qty', 'stock', 'quantity', 'opening_stock', 'qty'],
-  expiry_date: ['expiry_date', 'expiry', 'exp_date', 'best_before'],
+  name:           ['name', 'product_name', 'item_name', 'item', 'product'],
+  selling_price:  ['selling_price', 'price', 'sale_price', 'sp', 'rate', 'sell_price', 'sellprice'],
+  sku:            ['sku', 'barcode', 'code', 'product_code', 'item_code'],
+  size:           ['size', 'size_name', 'variant_size'],
+  category:       ['category', 'cat', 'group', 'department'],
+  unit:           ['unit', 'uom', 'unit_of_measure'],
+  purchase_price: ['purchase_price', 'cost', 'cost_price', 'pp', 'buy_price', 'purchaseprice'],
+  mrp:            ['mrp', 'maximum_retail_price', 'max_price'],
+  gst_rate:       ['gst_rate', 'gst', 'gst_%', 'tax', 'tax_rate', 'gstrate'],
+  hsn:            ['hsn', 'hsn_code', 'hsn_sac'],
+  stock_qty:      ['stock_qty', 'stock', 'quantity', 'opening_stock', 'qty'],
+  expiry_date:    ['expiry_date', 'expiry', 'exp_date', 'best_before'],
 };
 
 function mapRowKeys(raw) {
@@ -156,18 +154,21 @@ function mapRowKeys(raw) {
   return mapped;
 }
 
-function validateRow(mapped, rowIndex) {
+// ── Validation ────────────────────────────────────────────────
+
+function validateRow(mapped) {
   const errors = [];
   const warnings = [];
 
   const name = String(mapped.name || '').trim();
   if (!name) errors.push('Missing product name');
 
-  const price = Number(mapped.selling_price);
-  if (!mapped.selling_price && mapped.selling_price !== 0) {
-    errors.push('Missing selling price');
-  } else if (isNaN(price) || price < 0) {
-    errors.push('Invalid selling price');
+  const priceRaw = mapped.selling_price;
+  if (priceRaw === undefined || priceRaw === '') {
+    warnings.push('No selling price — will default to 0');
+  } else {
+    const price = Number(priceRaw);
+    if (isNaN(price) || price < 0) errors.push('Invalid selling price');
   }
 
   if (mapped.gst_rate !== undefined && mapped.gst_rate !== '') {
@@ -177,11 +178,13 @@ function validateRow(mapped, rowIndex) {
 
   if (mapped.stock_qty !== undefined && mapped.stock_qty !== '') {
     const qty = Number(mapped.stock_qty);
-    if (isNaN(qty) || qty < 0) warnings.push('Invalid stock quantity, will default to 0');
+    if (isNaN(qty) || qty < 0) warnings.push('Invalid stock quantity — will default to 0');
   }
 
   return { errors, warnings };
 }
+
+// ── Step 2: Validate & preview ────────────────────────────────
 
 async function runImportValidation() {
   if (!importState.file) return toast('Select a file first');
@@ -191,15 +194,13 @@ async function runImportValidation() {
     if (!rows.length) return toast('File is empty or has no data rows');
     importState.parsedRows = rows;
 
-    const skipErrors = $('import-skip-errors').checked;
     let successCount = 0, errorCount = 0, warnCount = 0;
     importState.validRows = [];
 
     const tbodyRows = rows.map((raw, i) => {
       const mapped = mapRowKeys(raw);
-      const { errors, warnings } = validateRow(mapped, i + 2);
+      const { errors, warnings } = validateRow(mapped);
       const hasError = errors.length > 0;
-      const hasWarn = warnings.length > 0;
 
       if (hasError) {
         errorCount++;
@@ -207,29 +208,32 @@ async function runImportValidation() {
         successCount++;
         importState.validRows.push(mapped);
       }
-      if (hasWarn) warnCount++;
+      if (warnings.length) warnCount++;
 
-      const statusClass = hasError ? 'error' : hasWarn ? 'warning' : 'success';
-      const statusText = hasError ? 'Error' : hasWarn ? 'Warning' : 'Valid';
-      const messages = [...errors, ...warnings].join('; ') || '—';
-      const productName = esc(String(mapped.name || raw[Object.keys(raw)[0]] || `Row ${i + 2}`).slice(0, 40));
+      const statusClass = hasError ? 'error' : warnings.length ? 'warning' : 'success';
+      const statusText  = hasError ? 'Error'  : warnings.length ? 'Warning' : 'Valid';
+      const messages    = [...errors, ...warnings].join('; ') || '—';
+      const productName = esc(String(mapped.name || raw[Object.keys(raw)[0]] || `Row ${i + 2}`).slice(0, 50));
 
       return `<tr>
         <td>${i + 2}</td>
         <td>${productName}</td>
         <td><span class="status-badge ${statusClass}">${statusText}</span></td>
-        <td style="font-size:0.85em; color:#6b7280;">${esc(messages)}</td>
+        <td style="font-size:0.85em;color:#6b7280;">${esc(messages)}</td>
       </tr>`;
     });
 
     $('preview-count').textContent =
-      `${rows.length} row${rows.length !== 1 ? 's' : ''} found · ${importState.validRows.length} will be imported`;
-    $('preview-success').textContent = successCount;
-    $('preview-error').textContent = errorCount;
+      `${rows.length} row${rows.length !== 1 ? 's' : ''} found — ${importState.validRows.length} will be imported`;
+    $('preview-success').textContent  = successCount;
+    $('preview-error').textContent    = errorCount;
     $('preview-warnings').textContent = warnCount;
     $('import-validation-list').innerHTML = tbodyRows.join('');
-    $('import-confirm-btn').disabled = importState.validRows.length === 0;
-    $('import-confirm-btn').textContent = `Import ${importState.validRows.length} Product${importState.validRows.length !== 1 ? 's' : ''}`;
+
+    const canImport = importState.validRows.length > 0;
+    $('import-confirm-btn').disabled    = !canImport;
+    $('import-confirm-btn').textContent =
+      `Import ${importState.validRows.length} Product${importState.validRows.length !== 1 ? 's' : ''}`;
 
     showImportStep('preview');
   } catch (err) {
@@ -239,38 +243,41 @@ async function runImportValidation() {
   }
 }
 
+// ── Step 3: Confirm & import ──────────────────────────────────
+
 async function runImportConfirm() {
   const rows = importState.validRows;
   if (!rows.length) return toast('Nothing valid to import');
 
   showImportStep('progress');
-  $('import-total').textContent = rows.length;
+  $('import-total').textContent   = rows.length;
   $('import-current').textContent = 0;
-  $('import-progress').value = 0;
+  $('import-progress').value      = 0;
   $('import-progress-text').textContent = '0%';
 
   const results = [];
-  const defaultGst = Number(state.settings.default_gst || 12);
+  const defaultGst  = Number(state.settings.default_gst  || 12);
   const defaultUnit = state.settings.default_unit || 'pcs';
 
   for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
+    const row  = rows[i];
     const name = String(row.name || '').trim();
     $('import-current-item').textContent = `Importing: ${name}`;
 
     try {
       const payload = {
         name,
-        sku: String(row.sku || '').trim() || null,
-        category: String(row.category || '').trim() || 'General',
-        unit: String(row.unit || defaultUnit).trim() || 'pcs',
-        selling_price: Number(row.selling_price) || 0,
+        sku:            String(row.sku || '').trim() || null,
+        size:           String(row.size || '').trim() || null,
+        category:       String(row.category || '').trim() || 'General',
+        unit:           String(row.unit || defaultUnit).trim() || 'pcs',
+        selling_price:  Number(row.selling_price) || 0,
         purchase_price: Number(row.purchase_price) || 0,
-        mrp: Number(row.mrp) || Number(row.selling_price) || 0,
-        gst_rate: row.gst_rate !== undefined && row.gst_rate !== '' ? Number(row.gst_rate) : defaultGst,
-        hsn: String(row.hsn || '').trim() || null,
-        stock_qty: Math.max(0, Math.floor(Number(row.stock_qty) || 0)),
-        expiry_date: parseImportDate(row.expiry_date),
+        mrp:            Number(row.mrp) || Number(row.selling_price) || 0,
+        gst_rate:       (row.gst_rate !== undefined && row.gst_rate !== '') ? Number(row.gst_rate) : defaultGst,
+        hsn:            String(row.hsn || '').trim() || null,
+        stock_qty:      Math.max(0, Math.floor(Number(row.stock_qty) || 0)),
+        expiry_date:    parseImportDate(row.expiry_date),
       };
 
       const { error } = await state.client.from('products').insert(payload);
@@ -281,27 +288,27 @@ async function runImportConfirm() {
     }
 
     const pct = Math.round(((i + 1) / rows.length) * 100);
-    $('import-progress').value = pct;
+    $('import-progress').value            = pct;
     $('import-progress-text').textContent = pct + '%';
-    $('import-current').textContent = i + 1;
+    $('import-current').textContent       = i + 1;
   }
 
   const successCount = results.filter((r) => r.status === 'success').length;
-  const failCount = results.filter((r) => r.status === 'error').length;
+  const failCount    = results.filter((r) => r.status === 'error').length;
 
   $('result-summary').textContent = `Import complete: ${successCount} succeeded, ${failCount} failed.`;
   $('result-success').textContent = successCount;
-  $('result-failed').textContent = failCount;
+  $('result-failed').textContent  = failCount;
 
   if (failCount > 0) {
     $('import-results-list').classList.remove('hidden');
-    $('import-results-rows').innerHTML = results.map((r) => `
-      <tr>
+    $('import-results-rows').innerHTML = results
+      .filter((r) => r.status === 'error')
+      .map((r) => `<tr>
         <td>${esc(r.name)}</td>
-        <td><span class="status-badge ${r.status}">${r.status === 'success' ? 'Imported' : 'Failed'}</span></td>
+        <td><span class="status-badge error">Failed</span></td>
         <td style="font-size:0.85em;">${esc(r.detail)}</td>
-      </tr>
-    `).join('');
+      </tr>`).join('');
   } else {
     $('import-results-list').classList.add('hidden');
   }
@@ -310,21 +317,20 @@ async function runImportConfirm() {
   await refresh();
 }
 
+// ── Date helper ───────────────────────────────────────────────
+
 function parseImportDate(val) {
   if (!val) return null;
-  // Excel serial date number
   if (typeof val === 'number') {
     const d = XLSX.SSF.parse_date_code(val);
-    if (d) return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
+    if (d) return `${d.y}-${String(d.m).padStart(2, '0')}-${String(d.d).padStart(2, '0')}`;
   }
   const s = String(val).trim();
   if (!s) return null;
-  // Try ISO: YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  // Try DD/MM/YYYY or DD-MM-YYYY
   const parts = s.split(/[\/\-\.]/);
   if (parts.length === 3 && parts[0].length <= 2) {
-    return `${parts[2].padStart(4,'0')}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`;
+    return `${parts[2].padStart(4, '0')}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
   }
   return null;
 }
