@@ -21,32 +21,7 @@
 
   <div id="toast-root" class="toast-root"></div>
 
-  <section id="config-view" class="auth-shell hidden">
-    <div class="auth-panel">
-      <div class="brand-row">
-        <div class="brand-mark">SB</div>
-        <div>
-          <h1>Connect Supabase</h1>
-          <p>Use your new Supabase project URL and anon key.</p>
-        </div>
-      </div>
-      <div class="form-grid">
-        <label>
-          Project URL
-<input id="cfg-url" placeholder="https://ebaawpgxkaehnvicsxvd.supabase.co" autocomplete="off">
-        </label>
-        <label>
-          Anon public key
-          <textarea id="cfg-key" rows="4" placeholder="eyJhbGciOi..."></textarea>
-        </label>
-      </div>
-      <div class="action-row">
-        <button id="save-config-btn" class="btn primary">Save Connection</button>
-      </div>
-      <p class="hint">Run `supabase-schema.sql` in your Supabase SQL editor before signing in.</p>
-    </div>
-  </section>
-
+  <!-- Auth View — shown when not logged in -->
   <section id="auth-view" class="auth-shell hidden">
     <div class="auth-panel">
       <div class="brand-row">
@@ -72,9 +47,8 @@
       </div>
       <div class="action-row">
         <button id="auth-submit-btn" class="btn primary">Login</button>
-        <button id="change-config-btn" class="btn ghost">Connection</button>
       </div>
-      <p id="auth-note" class="hint">Your Supabase account owns all business data through RLS.</p>
+      <p id="auth-note" class="hint">Your account owns all business data through row-level security.</p>
     </div>
   </section>
 
@@ -211,6 +185,19 @@
               <label>Invoice date<input id="bill-date" type="date"></label>
               <label>Invoice type<select id="bill-type"><option value="tax_invoice">Tax Invoice</option><option value="retail">Retail Invoice</option><option value="proforma">Proforma</option><option value="challan">Delivery Challan</option></select></label>
             </div>
+
+            <!-- Manual / Walk-in customer details -->
+            <div id="manual-customer-box" style="display:grid;grid-template-columns:1fr 1fr;gap:0.6rem 1rem;margin:0.75rem 0;padding:0.85rem 1rem;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+              <div style="grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;margin-bottom:0.25rem;">
+                <span style="font-size:0.8em;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;">Customer / Bill To</span>
+                <span style="font-size:0.78em;color:#94a3b8;">Leave blank for anonymous</span>
+              </div>
+              <label style="flex-direction:column;gap:0.25rem;font-size:0.85em;">Name<input id="manual-cust-name" placeholder="Customer name" style="padding:0.4rem 0.6rem;"></label>
+              <label style="flex-direction:column;gap:0.25rem;font-size:0.85em;">Phone<input id="manual-cust-phone" placeholder="Mobile number" style="padding:0.4rem 0.6rem;"></label>
+              <label style="flex-direction:column;gap:0.25rem;font-size:0.85em;">GSTIN<input id="manual-cust-gstin" placeholder="Optional" style="padding:0.4rem 0.6rem;"></label>
+              <label style="flex-direction:column;gap:0.25rem;font-size:0.85em;">Address<input id="manual-cust-address" placeholder="Optional" style="padding:0.4rem 0.6rem;"></label>
+            </div>
+
             <div class="line-adder">
               <select id="bill-product"></select>
               <select id="bill-variant"></select>
@@ -223,7 +210,10 @@
                 <tbody id="bill-lines"></tbody>
               </table>
             </div>
-            <button id="save-invoice-btn" class="btn primary full">Generate & Save Invoice</button>
+            <div style="display:flex;gap:0.75rem;margin-top:0.5rem;">
+              <button id="save-invoice-btn" class="btn primary" style="flex:1;">Generate &amp; Save Invoice</button>
+              <button type="button" class="btn ghost" onclick="printInvoicePreview()" title="Print current preview">🖨 Print</button>
+            </div>
           </div>
           <div class="invoice-preview" id="invoice-preview"></div>
         </div>
@@ -381,7 +371,7 @@
 
         <div class="action-row" style="margin-top:1.5rem;">
           <button class="btn ghost" id="import-cancel-btn" type="button">Cancel</button>
-          <button id="import-preview-btn" class="btn primary" type="button" disabled>Preview & Validate</button>
+          <button id="import-preview-btn" class="btn primary" type="button" disabled>Preview &amp; Validate</button>
         </div>
       </div>
 
@@ -522,6 +512,42 @@
 
     .import-results-summary { background: #f9fafb; padding: 1rem; border-radius: 6px; margin-bottom: 1rem; }
     .import-results-table.hidden { display: none; }
+
+    /* ── Invoice preview toolbar ── */
+    .preview-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.5rem 0.75rem;
+      background: #f1f5f9;
+      border-radius: 6px 6px 0 0;
+      border-bottom: 1px solid #e2e8f0;
+      margin-bottom: 0.75rem;
+    }
+    .preview-label { font-size: 0.78em; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.06em; }
+    .btn.small { padding: 0.3rem 0.75rem; font-size: 0.82em; }
+
+    /* ── Customer block on invoice ── */
+    .customer-block {
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 0.65rem 1rem;
+      margin-bottom: 0.75rem;
+      font-size: 0.9em;
+    }
+    .customer-block h4 {
+      margin: 0 0 0.3rem;
+      font-size: 0.75em;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .customer-block strong { display: block; margin-bottom: 0.15rem; }
+    .customer-block p { margin: 0.1rem 0; color: #4b5563; }
+
+    /* ── Print: hide toolbar ── */
+    @media print { .preview-toolbar { display: none !important; } }
   </style>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>

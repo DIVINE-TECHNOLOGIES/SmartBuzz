@@ -1,4 +1,6 @@
-const CONFIG_KEY = 'smartbuzz_supabase_config';
+// ── Hardcoded Supabase credentials ──────────────────────────────────────────
+const SUPABASE_URL = 'https://ebaawpgxkaehnvicsxvd.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImViYWF3cGd4a2FlaG52aWNzeHZkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI0NjI1NTYsImV4cCI6MjA5ODAzODU1Nn0.qsx3hCs7aKzbGSNsDjPibSyIbxAmecDk-2jMkWmed4o';
 
 const state = {
   client: null,
@@ -41,102 +43,95 @@ function toast(message) {
 }
 
 function setBusy(isBusy) {
-  $('content-loader').classList.toggle('hidden', !isBusy);
+  // content-loader only exists inside #app, guard against it being hidden/absent
+  const el = $('content-loader');
+  if (el) el.classList.toggle('hidden', !isBusy);
 }
 
 function show(view) {
-  ['config-view', 'auth-view', 'app'].forEach((id) => $(id).classList.add('hidden'));
-  $(view).classList.remove('hidden');
+  ['auth-view', 'app'].forEach((id) => {
+    const el = $(id);
+    if (el) el.classList.add('hidden');
+  });
+  const target = $(view);
+  if (target) target.classList.remove('hidden');
 }
 
-function getConfig() {
-  try {
-    return JSON.parse(localStorage.getItem(CONFIG_KEY) || 'null');
-  } catch {
-    return null;
+async function waitForSupabase(retries = 40, delayMs = 100) {
+  for (let i = 0; i < retries; i++) {
+    if (window.supabase) return true;
+    await new Promise((r) => setTimeout(r, delayMs));
   }
+  return false;
 }
 
-function saveConfig(config) {
-  localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
+function makeClient() {
+  if (state.client) return; // already created
+  state.client = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 }
 
-function makeClient(config) {
-  if (!window.supabase) throw new Error('Supabase library failed to load');
-  state.client = window.supabase.createClient(config.url, config.key);
-}
+// ── Boot sequence ────────────────────────────────────────────────────────────
+// Order matters:
+//   1. Wire auth-screen events only (Login button is visible immediately)
+//   2. Wait for Supabase CDN script
+//   3. Create client
+//   4. Check existing session
+//   5. If logged in → wire ALL app events → enter app
+//   6. If not logged in → show login screen (app events wired after login)
 
 async function boot() {
+  const bootLoader = $('boot-loader');
   try {
-    const bootLoader = $('boot-loader');
-    const cfgView = $('config-view');
-    const authView = $('auth-view');
-
-    // Guard against missing DOM nodes
+    // Date fields that are always in DOM
     if ($('stock-date')) $('stock-date').value = today();
     if ($('bill-date')) $('bill-date').value = today();
-    wireEvents();
 
-    const config = getConfig();
-    if (!config?.url || !config?.key) {
-      if (bootLoader) bootLoader.classList.add('hidden');
-      if (cfgView) show('config-view');
+    // Wire only the login screen events first
+    wireAuthEvents();
+
+    // Wait for the Supabase CDN bundle
+    const ready = await waitForSupabase();
+    if (!ready) throw new Error('Supabase library failed to load — check your internet connection.');
+
+    makeClient();
+
+    const { data, error } = await state.client.auth.getSession();
+    if (error) throw error;
+    state.session = data.session || null;
+
+    if (bootLoader) bootLoader.classList.add('hidden');
+
+    if (!state.session) {
+      show('auth-view');
       return;
     }
 
-    try {
-      makeClient(config);
-      const { data } = await state.client.auth.getSession();
-      state.session = data.session || null;
-      if (bootLoader) bootLoader.classList.add('hidden');
-      if (!state.session) {
-        if (authView) show('auth-view');
-        return;
-      }
-      await enterApp();
-    } catch (error) {
-      if (bootLoader) bootLoader.classList.add('hidden');
-      if (cfgView) show('config-view');
-      toast(error.message || 'Could not connect to Supabase');
-    }
-  } catch (error) {
-    // Last-resort: ensure we never stay stuck on loader
-    const bootLoader = $('boot-loader');
+    // Already logged in — wire app and go
+    wireAppEvents();
+    await enterApp();
+  } catch (err) {
     if (bootLoader) bootLoader.classList.add('hidden');
-    if ($('config-view')) show('config-view');
-    toast(error.message || 'App failed to start');
+    show('auth-view');
+    toast(err.message || 'App failed to start');
   }
 }
 
-
-function wireEvents() {
-  $('save-config-btn').addEventListener('click', () => {
-    const url = $('cfg-url').value.trim();
-    const key = $('cfg-key').value.trim();
-    if (!/^https:\/\/.+\.supabase\.co$/i.test(url) || key.length < 40) return toast('Enter a valid Supabase URL and anon key');
-    saveConfig({ url, key });
-    makeClient({ url, key });
-    show('auth-view');
-    toast('Supabase connection saved');
-  });
-
-  $('change-config-btn').addEventListener('click', () => {
-    const config = getConfig();
-    $('cfg-url').value = config?.url || '';
-    $('cfg-key').value = config?.key || '';
-    show('config-view');
-  });
-
+// ── Auth-screen events (Login / Create account) ──────────────────────────────
+function wireAuthEvents() {
   document.querySelectorAll('[data-auth-mode]').forEach((btn) => {
     btn.addEventListener('click', () => {
       state.authMode = btn.dataset.authMode;
-      $('login-tab').classList.toggle('active', state.authMode === 'login');
-      $('signup-tab').classList.toggle('active', state.authMode === 'signup');
+      $('login-tab')?.classList.toggle('active', state.authMode === 'login');
+      $('signup-tab')?.classList.toggle('active', state.authMode === 'signup');
       $('auth-submit-btn').textContent = state.authMode === 'login' ? 'Login' : 'Create account';
     });
   });
 
   $('auth-submit-btn').addEventListener('click', handleAuth);
+}
+
+// ── App events (wired only after client exists and user is logged in) ─────────
+function wireAppEvents() {
   $('logout-btn').addEventListener('click', async () => {
     await state.client.auth.signOut();
     state.session = null;
@@ -147,8 +142,12 @@ function wireEvents() {
     const btn = event.target.closest('button[data-page]');
     if (btn) navigate(btn.dataset.page);
   });
-  document.querySelectorAll('[data-page-link]').forEach((el) => el.addEventListener('click', () => navigate(el.dataset.pageLink)));
 
+  document.querySelectorAll('[data-page-link]').forEach((el) => {
+    el.addEventListener('click', () => navigate(el.dataset.pageLink));
+  });
+
+  $('bill-customer').addEventListener('change', onCustomerChange);
   $('refresh-btn').addEventListener('click', refresh);
   $('quick-bill-btn').addEventListener('click', () => navigate('billing'));
   $('add-product-btn').addEventListener('click', openProductDialog);
@@ -169,27 +168,40 @@ function wireEvents() {
   $('apply-report-btn').addEventListener('click', renderReport);
   $('print-report-btn').addEventListener('click', () => window.print());
 
-  // Import events wired here — single place, always runs
-  wireImportEvents();
+  // Import dialog (defined in import.js)
+  if (typeof wireImportEvents === 'function') wireImportEvents();
 }
 
+// ── Authentication ────────────────────────────────────────────────────────────
 async function handleAuth() {
+  // Ensure client exists (handles slow CDN edge case)
+  if (!state.client) {
+    const ready = await waitForSupabase();
+    if (!ready) return toast('Supabase not loaded — please refresh the page');
+    makeClient();
+  }
+
   const email = $('auth-email').value.trim();
   const password = $('auth-password').value;
   if (!email || !password) return toast('Email and password are required');
+
   setBusy(true);
   try {
     const method = state.authMode === 'login' ? 'signInWithPassword' : 'signUp';
     const { data, error } = await state.client.auth[method]({ email, password });
     if (error) throw error;
+
     state.session = data.session;
     if (!state.session) {
       toast('Check your email to confirm your account, then login');
       return;
     }
+
+    // Wire app events now that we have a client + session
+    wireAppEvents();
     await enterApp();
-  } catch (error) {
-    toast(error.message || 'Authentication failed');
+  } catch (err) {
+    toast(err.message || 'Authentication failed');
   } finally {
     setBusy(false);
   }
@@ -202,19 +214,14 @@ async function enterApp() {
   navigate('dashboard');
 }
 
+// ── Data refresh ──────────────────────────────────────────────────────────────
 async function refresh() {
   if (!state.client || !state.session) return;
   setBusy(true);
   try {
     const [
-      businessRes,
-      settingsRes,
-      productsRes,
-      variantsRes,
-      customersRes,
-      invoicesRes,
-      itemsRes,
-      stockRes,
+      businessRes, settingsRes, productsRes, variantsRes,
+      customersRes, invoicesRes, itemsRes, stockRes,
     ] = await Promise.all([
       state.client.from('business_profiles').select('*').maybeSingle(),
       state.client.from('business_settings').select('*').maybeSingle(),
@@ -230,24 +237,25 @@ async function refresh() {
       if (res.error && res.status !== 406) throw res.error;
     });
 
-    state.business = businessRes.data || null;
-    state.settings = settingsRes.data || state.settings;
-    state.products = productsRes.data || [];
-    state.variants = variantsRes.data || [];
-    state.customers = customersRes.data || [];
-    state.invoices = invoicesRes.data || [];
-    state.invoiceItems = itemsRes.data || [];
-    state.stockMovements = stockRes.data || [];
+    state.business      = businessRes.data  || null;
+    state.settings      = settingsRes.data  || state.settings;
+    state.products      = productsRes.data  || [];
+    state.variants      = variantsRes.data  || [];
+    state.customers     = customersRes.data || [];
+    state.invoices      = invoicesRes.data  || [];
+    state.invoiceItems  = itemsRes.data     || [];
+    state.stockMovements = stockRes.data    || [];
 
     hydrateSettings();
     renderAll();
-  } catch (error) {
-    toast(error.message || 'Could not load data. Check schema setup.');
+  } catch (err) {
+    toast(err.message || 'Could not load data. Check schema setup.');
   } finally {
     setBusy(false);
   }
 }
 
+// ── Navigation ────────────────────────────────────────────────────────────────
 function navigate(page) {
   state.page = page;
   document.querySelectorAll('.page').forEach((el) => el.classList.remove('active'));
@@ -268,25 +276,30 @@ function renderAll() {
   renderReport();
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function variantsFor(productId) {
   return state.variants.filter((v) => v.product_id === productId);
 }
 
 function currentStock(product) {
   const vars = variantsFor(product.id);
-  return vars.length ? vars.reduce((sum, v) => sum + Number(v.stock_qty || 0), 0) : Number(product.stock_qty || 0);
+  return vars.length
+    ? vars.reduce((sum, v) => sum + Number(v.stock_qty || 0), 0)
+    : Number(product.stock_qty || 0);
 }
 
+// ── Dashboard ─────────────────────────────────────────────────────────────────
 function renderDashboard() {
   const revenue = state.invoices.reduce((sum, inv) => sum + Number(inv.total || 0), 0);
-  const gst = state.invoices.reduce((sum, inv) => sum + Number(inv.gst_total || 0), 0);
+  const gst     = state.invoices.reduce((sum, inv) => sum + Number(inv.gst_total || 0), 0);
   const threshold = Number(state.settings.low_stock_threshold || 10);
   const low = state.products.filter((p) => currentStock(p) <= threshold);
+
   $('stats-grid').innerHTML = [
-    ['Revenue', `₹${money(revenue)}`],
-    ['Invoices', state.invoices.length],
+    ['Revenue',       `₹${money(revenue)}`],
+    ['Invoices',      state.invoices.length],
     ['GST Collected', `₹${money(gst)}`],
-    ['Low Stock', low.length],
+    ['Low Stock',     low.length],
   ].map(([label, value]) => `<div class="stat"><span>${label}</span><strong>${value}</strong></div>`).join('');
 
   $('recent-invoices').innerHTML = listOrEmpty(state.invoices.slice(0, 6).map((inv) => {
@@ -295,11 +308,12 @@ function renderDashboard() {
   }));
 
   $('low-stock-label').textContent = `Threshold ${threshold}`;
-  $('low-stock-list').innerHTML = listOrEmpty(low.slice(0, 8).map((p) => (
+  $('low-stock-list').innerHTML = listOrEmpty(low.slice(0, 8).map((p) =>
     `<div class="list-item"><div><strong>${esc(p.name)}</strong><span>${esc(p.category || 'General')}</span></div><span class="pill amber">${currentStock(p)} ${esc(p.unit || 'pcs')}</span></div>`
-  )));
+  ));
 }
 
+// ── Products ──────────────────────────────────────────────────────────────────
 function renderProducts() {
   const q = $('product-search').value.toLowerCase();
   const rows = state.products
@@ -326,59 +340,60 @@ function renderProducts() {
 function populateProductSelects() {
   const options = '<option value="">Select product</option>' +
     state.products.map((p) => {
-      const label = p.size ? `${esc(p.name)} (${esc(p.size)}) · Stock ${currentStock(p)}` : `${esc(p.name)} · Stock ${currentStock(p)}`;
+      const label = p.size
+        ? `${esc(p.name)} (${esc(p.size)}) · Stock ${currentStock(p)}`
+        : `${esc(p.name)} · Stock ${currentStock(p)}`;
       return `<option value="${p.id}">${label}</option>`;
     }).join('');
+
   ['stock-product', 'bill-product'].forEach((id) => {
     const el = $(id);
-    const value = el.value;
+    if (!el) return;
+    const prev = el.value;
     el.innerHTML = options;
-    if (value) el.value = value;
+    if (prev) el.value = prev;
   });
   populateStockVariants();
   populateBillVariants();
 }
 
 function populateVariantSelect(selectId, productId, includeBase = true) {
+  const el = $(selectId);
+  if (!el) return;
   const vars = variantsFor(productId);
   const base = includeBase ? '<option value="">Base product</option>' : '<option value="">Select variant</option>';
-  $(selectId).innerHTML = base + vars.map((v) => `<option value="${v.id}">${esc(v.name)} · Stock ${Number(v.stock_qty || 0)}</option>`).join('');
+  el.innerHTML = base + vars.map((v) => `<option value="${v.id}">${esc(v.name)} · Stock ${Number(v.stock_qty || 0)}</option>`).join('');
 }
 
-function populateStockVariants() {
-  populateVariantSelect('stock-variant', $('stock-product').value, true);
-}
-
-function populateBillVariants() {
-  populateVariantSelect('bill-variant', $('bill-product').value, true);
-}
+function populateStockVariants() { populateVariantSelect('stock-variant', $('stock-product')?.value, true); }
+function populateBillVariants()  { populateVariantSelect('bill-variant',  $('bill-product')?.value,  true); }
 
 function openProductDialog() {
   $('product-dialog-title').textContent = 'Add Product';
   $('product-id').value = '';
-  ['p-name', 'p-sku', 'p-size', 'p-category', 'p-price', 'p-purchase', 'p-mrp', 'p-hsn', 'p-expiry'].forEach((id) => $(id).value = '');
+  ['p-name','p-sku','p-size','p-category','p-price','p-purchase','p-mrp','p-hsn','p-expiry'].forEach((id) => $(id).value = '');
   $('p-unit').value = state.settings.default_unit || 'pcs';
-  $('p-gst').value = state.settings.default_gst || 12;
+  $('p-gst').value  = state.settings.default_gst  || 12;
   $('variant-editor').innerHTML = '';
   $('product-dialog').showModal();
 }
 
-window.editProduct = function editProduct(id) {
+window.editProduct = function (id) {
   const p = state.products.find((item) => item.id === id);
   if (!p) return;
   $('product-dialog-title').textContent = 'Edit Product';
-  $('product-id').value = p.id;
-  $('p-name').value = p.name || '';
-  $('p-sku').value = p.sku || '';
-  $('p-size').value = p.size || '';
-  $('p-category').value = p.category || '';
-  $('p-unit').value = p.unit || 'pcs';
-  $('p-price').value = p.selling_price || 0;
-  $('p-purchase').value = p.purchase_price || 0;
-  $('p-mrp').value = p.mrp || 0;
-  $('p-gst').value = p.gst_rate || 0;
-  $('p-hsn').value = p.hsn || '';
-  $('p-expiry').value = p.expiry_date || '';
+  $('product-id').value   = p.id;
+  $('p-name').value       = p.name || '';
+  $('p-sku').value        = p.sku || '';
+  $('p-size').value       = p.size || '';
+  $('p-category').value   = p.category || '';
+  $('p-unit').value       = p.unit || 'pcs';
+  $('p-price').value      = p.selling_price || 0;
+  $('p-purchase').value   = p.purchase_price || 0;
+  $('p-mrp').value        = p.mrp || 0;
+  $('p-gst').value        = p.gst_rate || 0;
+  $('p-hsn').value        = p.hsn || '';
+  $('p-expiry').value     = p.expiry_date || '';
   $('variant-editor').innerHTML = '';
   variantsFor(id).forEach((v) => addVariantRow(v));
   $('product-dialog').showModal();
@@ -388,7 +403,7 @@ function addVariantRow(v = {}) {
   const row = document.createElement('div');
   row.className = 'variant-row';
   row.innerHTML = `
-    <input class="var-name" placeholder="Variant name" value="${esc(v.name || '')}">
+    <input class="var-name"  placeholder="Variant name" value="${esc(v.name || '')}">
     <input class="var-stock" type="number" min="0" placeholder="Stock" value="${Number(v.stock_qty || 0)}">
     <input class="var-price" type="number" min="0" step="0.01" placeholder="Price" value="${Number(v.selling_price || 0)}">
     <button class="icon-btn" type="button">✕</button>
@@ -399,26 +414,27 @@ function addVariantRow(v = {}) {
 }
 
 async function saveProduct() {
-  const name = $('p-name').value.trim();
+  const name  = $('p-name').value.trim();
   const price = Number($('p-price').value || 0);
-  if (!name) return toast('Product name is required');
+  if (!name)    return toast('Product name is required');
   if (price < 0) return toast('Selling price cannot be negative');
   setBusy(true);
   try {
     const id = $('product-id').value || undefined;
     const payload = {
       name,
-      sku: $('p-sku').value.trim() || null,
-      size: $('p-size').value.trim() || null,
-      category: $('p-category').value.trim() || 'General',
-      unit: $('p-unit').value.trim() || 'pcs',
+      sku:           $('p-sku').value.trim()      || null,
+      size:          $('p-size').value.trim()     || null,
+      category:      $('p-category').value.trim() || 'General',
+      unit:          $('p-unit').value.trim()     || 'pcs',
       selling_price: price,
       purchase_price: Number($('p-purchase').value || 0),
-      mrp: Number($('p-mrp').value || price),
-      gst_rate: Number($('p-gst').value || 0),
-      hsn: $('p-hsn').value.trim() || null,
-      expiry_date: $('p-expiry').value || null,
+      mrp:           Number($('p-mrp').value      || price),
+      gst_rate:      Number($('p-gst').value      || 0),
+      hsn:           $('p-hsn').value.trim()      || null,
+      expiry_date:   $('p-expiry').value          || null,
     };
+
     const { data, error } = id
       ? await state.client.from('products').update(payload).eq('id', id).select('id').single()
       : await state.client.from('products').insert(payload).select('id').single();
@@ -426,65 +442,68 @@ async function saveProduct() {
     const productId = data.id;
 
     const variantRows = [...document.querySelectorAll('.variant-row')].map((row) => ({
-      id: row.querySelector('.var-id').value || undefined,
-      product_id: productId,
-      name: row.querySelector('.var-name').value.trim(),
-      stock_qty: Number(row.querySelector('.var-stock').value || 0),
+      id:            row.querySelector('.var-id').value    || undefined,
+      product_id:    productId,
+      name:          row.querySelector('.var-name').value.trim(),
+      stock_qty:     Number(row.querySelector('.var-stock').value || 0),
       selling_price: Number(row.querySelector('.var-price').value || price),
     })).filter((v) => v.name);
 
     if (id) {
       const existingIds = variantsFor(id).map((v) => v.id);
-      const keptIds = variantRows.filter((v) => v.id).map((v) => v.id);
-      const removeIds = existingIds.filter((existingId) => !keptIds.includes(existingId));
+      const keptIds     = variantRows.filter((v) => v.id).map((v) => v.id);
+      const removeIds   = existingIds.filter((eid) => !keptIds.includes(eid));
       if (removeIds.length) {
         const { error } = await state.client.from('product_variants').delete().in('id', removeIds);
         if (error) throw error;
       }
     }
+
     if (variantRows.length) {
       const { error } = await state.client.from('product_variants').upsert(variantRows);
       if (error) throw error;
-      const totalVariantStock = variantRows.reduce((sum, v) => sum + Number(v.stock_qty || 0), 0);
-      const { error: stockError } = await state.client.from('products').update({ stock_qty: totalVariantStock }).eq('id', productId);
-      if (stockError) throw stockError;
+      const totalStock = variantRows.reduce((s, v) => s + Number(v.stock_qty || 0), 0);
+      const { error: se } = await state.client.from('products').update({ stock_qty: totalStock }).eq('id', productId);
+      if (se) throw se;
     } else if (id && variantsFor(id).length) {
-      const { error: stockError } = await state.client.from('products').update({ stock_qty: 0 }).eq('id', productId);
-      if (stockError) throw stockError;
+      const { error: se } = await state.client.from('products').update({ stock_qty: 0 }).eq('id', productId);
+      if (se) throw se;
     }
+
     $('product-dialog').close();
     await refresh();
     toast('Product saved');
-  } catch (error) {
-    toast(error.message || 'Could not save product');
+  } catch (err) {
+    toast(err.message || 'Could not save product');
   } finally {
     setBusy(false);
   }
 }
 
+// ── Stock ─────────────────────────────────────────────────────────────────────
 async function receiveStock() {
   const productId = $('stock-product').value;
   const variantId = $('stock-variant').value || null;
-  const quantity = Number($('stock-qty').value || 0);
+  const quantity  = Number($('stock-qty').value || 0);
   if (!productId || quantity <= 0) return toast('Select product and enter quantity');
   setBusy(true);
   try {
     const { error } = await state.client.rpc('receive_stock', {
-      p_product_id: productId,
-      p_variant_id: variantId,
-      p_quantity: quantity,
-      p_source: $('stock-source').value.trim(),
-      p_notes: $('stock-notes').value.trim(),
+      p_product_id:   productId,
+      p_variant_id:   variantId,
+      p_quantity:     quantity,
+      p_source:       $('stock-source').value.trim(),
+      p_notes:        $('stock-notes').value.trim(),
       p_received_date: $('stock-date').value || today(),
     });
     if (error) throw error;
-    $('stock-qty').value = 1;
+    $('stock-qty').value    = 1;
     $('stock-source').value = '';
-    $('stock-notes').value = '';
+    $('stock-notes').value  = '';
     await refresh();
     toast('Stock received');
-  } catch (error) {
-    toast(error.message || 'Could not add stock');
+  } catch (err) {
+    toast(err.message || err?.details || 'Could not add stock');
   } finally {
     setBusy(false);
   }
@@ -498,35 +517,61 @@ function renderStock() {
   }));
 }
 
+// ── Billing ───────────────────────────────────────────────────────────────────
 function renderBilling() {
   populateProductSelects();
-  $('bill-customer').innerHTML = '<option value="">Walk-in customer</option>' +
+  $('bill-customer').innerHTML = '<option value="">Walk-in / manual entry</option>' +
     state.customers.map((c) => `<option value="${c.id}">${esc(c.name)} · ${esc(c.phone || '')}</option>`).join('');
   $('invoice-number').textContent = 'Next invoice will be assigned on save';
+  onCustomerChange(); // set initial state of manual fields
   renderBillLines();
+}
+
+// Show/hide manual customer fields and auto-fill from saved customer
+function onCustomerChange() {
+  const customerId = $('bill-customer').value;
+  const manualBox  = $('manual-customer-box');
+  if (!customerId) {
+    // Walk-in — show manual entry fields, clear them
+    manualBox.style.display = 'grid';
+    // only clear if switching TO walk-in (not on first render if already typed)
+  } else {
+    // Saved customer selected — hide manual box, show their info in preview
+    manualBox.style.display = 'none';
+    const c = state.customers.find((cu) => cu.id === customerId);
+    if (c) {
+      $('manual-cust-name').value    = c.name    || '';
+      $('manual-cust-phone').value   = c.phone   || '';
+      $('manual-cust-address').value = c.address || '';
+      $('manual-cust-gstin').value   = c.gstin   || '';
+    }
+  }
+  renderBillLines(); // refresh preview with customer info
 }
 
 function addBillLine() {
   const product = state.products.find((p) => p.id === $('bill-product').value);
   if (!product) return toast('Select a product');
-  const variant = state.variants.find((v) => v.id === $('bill-variant').value);
-  const qty = Number($('bill-qty').value || 0);
+  const variant   = state.variants.find((v) => v.id === $('bill-variant').value);
+  const qty       = Number($('bill-qty').value || 0);
   if (qty <= 0) return toast('Enter quantity');
   const available = variant ? Number(variant.stock_qty || 0) : Number(product.stock_qty || 0);
   if (qty > available) return toast(`Only ${available} in stock`);
   const price = Number(variant?.selling_price || product.selling_price || 0);
-  const existing = state.billLines.find((line) => line.product_id === product.id && (line.variant_id || '') === (variant?.id || ''));
+  const existing = state.billLines.find((line) =>
+    line.product_id === product.id && (line.variant_id || '') === (variant?.id || '')
+  );
   if (existing) {
     existing.quantity += qty;
   } else {
     state.billLines.push({
       product_id: product.id,
       variant_id: variant?.id || null,
-      name: variant ? `${product.name} - ${variant.name}` : product.name,
-      quantity: qty,
+      name:       variant ? `${product.name} - ${variant.name}` : product.name,
+      quantity:   qty,
       unit_price: price,
-      gst_rate: Number(product.gst_rate || 0),
-      hsn: product.hsn || '',
+      gst_rate:   Number(product.gst_rate || 0),
+      hsn:        product.hsn || '',
     });
   }
   $('bill-qty').value = 1;
@@ -534,13 +579,11 @@ function addBillLine() {
 }
 
 function renderBillLines() {
-  let subtotal = 0;
-  let gst = 0;
+  let subtotal = 0, gst = 0;
   $('bill-lines').innerHTML = state.billLines.map((line, idx) => {
     const base = line.quantity * line.unit_price;
-    const tax = $('bill-type').value === 'challan' ? 0 : base * line.gst_rate / 100;
-    subtotal += base;
-    gst += tax;
+    const tax  = $('bill-type').value === 'challan' ? 0 : base * line.gst_rate / 100;
+    subtotal += base; gst += tax;
     return `<tr>
       <td>${esc(line.name)}</td>
       <td>${line.quantity}</td>
@@ -553,7 +596,7 @@ function renderBillLines() {
   renderInvoicePreview(subtotal, gst);
 }
 
-window.removeBillLine = function removeBillLine(index) {
+window.removeBillLine = function (index) {
   state.billLines.splice(index, 1);
   renderBillLines();
 };
@@ -563,62 +606,155 @@ async function saveInvoice() {
   setBusy(true);
   try {
     const { error } = await state.client.rpc('create_invoice', {
-      p_customer_id: $('bill-customer').value || null,
+      p_customer_id:  $('bill-customer').value || null,
       p_invoice_date: $('bill-date').value || today(),
       p_invoice_type: $('bill-type').value,
       p_payment_mode: $('bill-payment').value,
       p_items: state.billLines.map((line) => ({
         product_id: line.product_id,
         variant_id: line.variant_id,
-        quantity: line.quantity,
+        quantity:   line.quantity,
         unit_price: line.unit_price,
       })),
     });
     if (error) throw error;
+    // Grab preview HTML before clearing billLines
+    const printableHTML = $('printable-invoice')?.innerHTML || '';
     state.billLines = [];
     await refresh();
     navigate('invoices');
     toast('Invoice saved');
-  } catch (error) {
-    toast(error.message || 'Could not save invoice');
+    // Offer print after a short delay so toast is visible
+    if (printableHTML) {
+      setTimeout(() => {
+        if (confirm('Invoice saved! Print it now?')) {
+          const biz = state.business || {};
+          const win = window.open('', '_blank', 'width=800,height=700');
+          win.document.write(`<!DOCTYPE html><html><head>
+            <title>Invoice</title>
+            <style>
+              body { font-family: Arial, sans-serif; font-size: 13px; padding: 2rem; color: #111; }
+              h2 { margin: 0 0 0.25rem; } p { margin: 0.15rem 0; }
+              table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+              th, td { padding: 0.5rem 0.6rem; border: 1px solid #ddd; text-align: left; }
+              th { background: #f5f5f5; font-weight: 600; }
+              .money { text-align: right; }
+              .invoice-head { display: flex; justify-content: space-between; border-bottom: 2px solid #333; padding-bottom: 1rem; margin-bottom: 1rem; }
+              .customer-block { background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px; padding: 0.75rem 1rem; margin-bottom: 1rem; }
+              .customer-block h4 { margin: 0 0 0.4rem; font-size: 0.85em; color: #666; text-transform: uppercase; letter-spacing: 0.05em; }
+              .invoice-total { text-align: right; margin-top: 0.5rem; }
+              .invoice-total p, .invoice-total strong { display: flex; justify-content: flex-end; gap: 2rem; margin: 0.2rem 0; }
+              .invoice-total strong { font-size: 1.1em; border-top: 1px solid #333; padding-top: 0.4rem; margin-top: 0.4rem; }
+              .preview-toolbar { display: none; }
+            </style>
+          </head><body>${printableHTML}</body></html>`);
+          win.document.close();
+          win.focus();
+          setTimeout(() => win.print(), 400);
+        }
+      }, 500);
+    }
+  } catch (err) {
+    toast(err.message || err?.details || 'Could not save invoice');
   } finally {
     setBusy(false);
   }
 }
 
-function renderInvoicePreview(subtotal = 0, gst = 0) {
-  const business = state.business || {};
-  const total = subtotal + gst;
-  $('invoice-preview').innerHTML = `
-    <div class="invoice-head">
-      <div>
-        <h2>${esc(business.name || 'Your Business')}</h2>
-        <p>${esc(business.address || '')}</p>
-        <p>${esc(business.phone || '')} ${business.email ? ' | ' + esc(business.email) : ''}</p>
-        <p>${business.gstin ? 'GSTIN: ' + esc(business.gstin) : ''}</p>
-      </div>
-      <div>
-        <h2>${$('bill-type').selectedOptions[0]?.textContent || 'Invoice'}</h2>
-        <p>Date: ${esc($('bill-date').value || today())}</p>
-        <p>Payment: ${esc($('bill-payment').value)}</p>
-      </div>
-    </div>
-    <table>
-      <thead><tr><th>Item</th><th>Qty</th><th>Rate</th><th>GST</th><th class="money">Amount</th></tr></thead>
-      <tbody>${state.billLines.map((line) => {
-        const base = line.quantity * line.unit_price;
-        const tax = $('bill-type').value === 'challan' ? 0 : base * line.gst_rate / 100;
-        return `<tr><td>${esc(line.name)}</td><td>${line.quantity}</td><td>₹${money(line.unit_price)}</td><td>${line.gst_rate}%</td><td class="money">₹${money(base + tax)}</td></tr>`;
-      }).join('') || emptyRow(5, 'Invoice preview')}</tbody>
-    </table>
-    <div class="invoice-total"><div>
-      <p><span>Subtotal</span><span>₹${money(subtotal)}</span></p>
-      <p><span>GST</span><span>₹${money(gst)}</span></p>
-      <strong><span>Total</span><span>₹${money(total)}</span></strong>
-    </div></div>
-  `;
+function getCustomerInfo() {
+  // Returns customer details from either the saved record or manual entry fields
+  const customerId = $('bill-customer').value;
+  if (customerId) {
+    return state.customers.find((c) => c.id === customerId) || {};
+  }
+  // Walk-in / manual
+  const name    = $('manual-cust-name').value.trim();
+  const phone   = $('manual-cust-phone').value.trim();
+  const address = $('manual-cust-address').value.trim();
+  const gstin   = $('manual-cust-gstin').value.trim();
+  return { name, phone, address, gstin };
 }
 
+function printInvoicePreview() {
+  const previewEl = $('invoice-preview');
+  const win = window.open('', '_blank', 'width=800,height=700');
+  win.document.write(`<!DOCTYPE html><html><head>
+    <title>Invoice</title>
+    <style>
+      body { font-family: Arial, sans-serif; font-size: 13px; padding: 2rem; color: #111; }
+      h2 { margin: 0 0 0.25rem; }
+      p  { margin: 0.15rem 0; }
+      table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+      th, td { padding: 0.5rem 0.6rem; border: 1px solid #ddd; text-align: left; }
+      th { background: #f5f5f5; font-weight: 600; }
+      .money { text-align: right; }
+      .invoice-head { display: flex; justify-content: space-between; border-bottom: 2px solid #333; padding-bottom: 1rem; margin-bottom: 1rem; }
+      .customer-block { background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px; padding: 0.75rem 1rem; margin-bottom: 1rem; }
+      .customer-block h4 { margin: 0 0 0.4rem; font-size: 0.85em; color: #666; text-transform: uppercase; letter-spacing: 0.05em; }
+      .invoice-total { text-align: right; margin-top: 0.5rem; }
+      .invoice-total p, .invoice-total strong { display: flex; justify-content: flex-end; gap: 2rem; margin: 0.2rem 0; }
+      .invoice-total strong { font-size: 1.1em; border-top: 1px solid #333; padding-top: 0.4rem; margin-top: 0.4rem; }
+      @media print { body { padding: 0; } }
+    </style>
+  </head><body>${previewEl.innerHTML}</body></html>`);
+  win.document.close();
+  win.focus();
+  setTimeout(() => { win.print(); }, 400);
+}
+
+function renderInvoicePreview(subtotal = 0, gst = 0) {
+  const business  = state.business || {};
+  const total     = subtotal + gst;
+  const isChallan = $('bill-type').value === 'challan';
+  const customer  = getCustomerInfo();
+
+  // Customer block HTML (only if we have at least a name)
+  const custHTML = customer.name ? `
+    <div class="customer-block print-only-show">
+      <h4>Bill To</h4>
+      <strong>${esc(customer.name)}</strong>
+      ${customer.phone   ? `<p>${esc(customer.phone)}</p>`   : ''}
+      ${customer.address ? `<p>${esc(customer.address)}</p>` : ''}
+      ${customer.gstin   ? `<p>GSTIN: ${esc(customer.gstin)}</p>` : ''}
+    </div>` : '';
+
+  $('invoice-preview').innerHTML = `
+    <div class="preview-toolbar">
+      <span class="preview-label">Live Preview</span>
+      <button class="btn ghost small" onclick="printInvoicePreview()">🖨 Print Preview</button>
+    </div>
+    <div id="printable-invoice">
+      <div class="invoice-head">
+        <div>
+          <h2>${esc(business.name || 'Your Business')}</h2>
+          <p>${esc(business.address || '')}</p>
+          <p>${esc(business.phone || '')}${business.email ? ' | ' + esc(business.email) : ''}</p>
+          <p>${business.gstin ? 'GSTIN: ' + esc(business.gstin) : ''}</p>
+        </div>
+        <div style="text-align:right">
+          <h2>${$('bill-type').selectedOptions[0]?.textContent || 'Invoice'}</h2>
+          <p>Date: ${esc($('bill-date').value || today())}</p>
+          <p>Payment: ${esc($('bill-payment').value)}</p>
+        </div>
+      </div>
+      ${custHTML}
+      <table>
+        <thead><tr><th>Item</th><th>Qty</th><th>Rate</th><th>GST</th><th class="money">Amount</th></tr></thead>
+        <tbody>${state.billLines.map((line) => {
+          const base = line.quantity * line.unit_price;
+          const tax  = isChallan ? 0 : base * line.gst_rate / 100;
+          return `<tr><td>${esc(line.name)}</td><td>${line.quantity}</td><td>₹${money(line.unit_price)}</td><td>${isChallan ? '—' : line.gst_rate + '%'}</td><td class="money">₹${money(base + tax)}</td></tr>`;
+        }).join('') || emptyRow(5, 'Add items to see the invoice preview')}</tbody>
+      </table>
+      <div class="invoice-total"><div>
+        <p><span>Subtotal</span><span>₹${money(subtotal)}</span></p>
+        ${!isChallan ? `<p><span>GST</span><span>₹${money(gst)}</span></p>` : ''}
+        <strong><span>Total</span><span>₹${money(total)}</span></strong>
+      </div></div>
+    </div>`;
+}
+
+// ── Invoices ──────────────────────────────────────────────────────────────────
 function renderInvoices() {
   const q = $('invoice-search').value.toLowerCase();
   const rows = state.invoices
@@ -628,7 +764,7 @@ function renderInvoices() {
     })
     .map((inv) => {
       const customer = state.customers.find((c) => c.id === inv.customer_id);
-      const count = state.invoiceItems.filter((i) => i.invoice_id === inv.id).length;
+      const count    = state.invoiceItems.filter((i) => i.invoice_id === inv.id).length;
       return `<tr>
         <td><strong>${esc(inv.invoice_no)}</strong></td>
         <td>${esc(customer?.name || 'Walk-in')}</td>
@@ -641,6 +777,7 @@ function renderInvoices() {
   $('invoices-table').innerHTML = rows.join('') || emptyRow(6, 'No invoices yet');
 }
 
+// ── Customers ─────────────────────────────────────────────────────────────────
 async function saveCustomer() {
   const name = $('customer-name').value.trim();
   if (!name) return toast('Customer name is required');
@@ -648,37 +785,38 @@ async function saveCustomer() {
   try {
     const { error } = await state.client.from('customers').insert({
       name,
-      phone: $('customer-phone').value.trim() || null,
-      email: $('customer-email').value.trim() || null,
-      gstin: $('customer-gstin').value.trim() || null,
-      address: $('customer-address').value.trim() || null,
+      phone:   $('customer-phone').value.trim()  || null,
+      email:   $('customer-email').value.trim()  || null,
+      gstin:   $('customer-gstin').value.trim()  || null,
+      address: $('customer-address').value.trim()|| null,
     });
     if (error) throw error;
-    ['customer-name', 'customer-phone', 'customer-email', 'customer-gstin', 'customer-address'].forEach((id) => $(id).value = '');
+    ['customer-name','customer-phone','customer-email','customer-gstin','customer-address'].forEach((id) => $(id).value = '');
     await refresh();
     toast('Customer saved');
-  } catch (error) {
-    toast(error.message || 'Could not save customer');
+  } catch (err) {
+    toast(err.message || 'Could not save customer');
   } finally {
     setBusy(false);
   }
 }
 
 function renderCustomers() {
-  $('customers-list').innerHTML = listOrEmpty(state.customers.map((c) => (
-    `<div class="list-item"><div><strong>${esc(c.name)}</strong><span>${esc(c.phone || 'No phone')} ${c.gstin ? ' · GSTIN ' + esc(c.gstin) : ''}</span></div></div>`
-  )));
+  $('customers-list').innerHTML = listOrEmpty(state.customers.map((c) =>
+    `<div class="list-item"><div><strong>${esc(c.name)}</strong><span>${esc(c.phone || 'No phone')}${c.gstin ? ' · GSTIN ' + esc(c.gstin) : ''}</span></div></div>`
+  ));
 }
 
+// ── Settings ──────────────────────────────────────────────────────────────────
 function hydrateSettings() {
-  $('biz-name').value = state.business?.name || '';
-  $('biz-gstin').value = state.business?.gstin || '';
-  $('biz-phone').value = state.business?.phone || '';
-  $('biz-email').value = state.business?.email || '';
+  $('biz-name').value    = state.business?.name    || '';
+  $('biz-gstin').value   = state.business?.gstin   || '';
+  $('biz-phone').value   = state.business?.phone   || '';
+  $('biz-email').value   = state.business?.email   || '';
   $('biz-address').value = state.business?.address || '';
   $('set-low-stock').value = state.settings.low_stock_threshold || 10;
-  $('set-gst').value = state.settings.default_gst || 12;
-  $('set-unit').value = state.settings.default_unit || 'pcs';
+  $('set-gst').value       = state.settings.default_gst  || 12;
+  $('set-unit').value      = state.settings.default_unit || 'pcs';
 }
 
 async function saveBusiness() {
@@ -686,18 +824,18 @@ async function saveBusiness() {
   try {
     const payload = {
       user_id: state.session.user.id,
-      name: $('biz-name').value.trim() || 'My Business',
-      gstin: $('biz-gstin').value.trim() || null,
-      phone: $('biz-phone').value.trim() || null,
-      email: $('biz-email').value.trim() || null,
+      name:    $('biz-name').value.trim()    || 'My Business',
+      gstin:   $('biz-gstin').value.trim()   || null,
+      phone:   $('biz-phone').value.trim()   || null,
+      email:   $('biz-email').value.trim()   || null,
       address: $('biz-address').value.trim() || null,
     };
     const { error } = await state.client.from('business_profiles').upsert(payload, { onConflict: 'user_id' });
     if (error) throw error;
     await refresh();
     toast('Business profile saved');
-  } catch (error) {
-    toast(error.message || 'Could not save business profile');
+  } catch (err) {
+    toast(err.message || 'Could not save business profile');
   } finally {
     setBusy(false);
   }
@@ -707,27 +845,30 @@ async function saveSettings() {
   setBusy(true);
   try {
     const { error } = await state.client.from('business_settings').upsert({
-      user_id: state.session.user.id,
+      user_id:             state.session.user.id,
       low_stock_threshold: Number($('set-low-stock').value || 10),
-      default_gst: Number($('set-gst').value || 12),
-      default_unit: $('set-unit').value.trim() || 'pcs',
+      default_gst:         Number($('set-gst').value || 12),
+      default_unit:        $('set-unit').value.trim() || 'pcs',
     }, { onConflict: 'user_id' });
     if (error) throw error;
     await refresh();
     toast('Defaults saved');
-  } catch (error) {
-    toast(error.message || 'Could not save settings');
+  } catch (err) {
+    toast(err.message || 'Could not save settings');
   } finally {
     setBusy(false);
   }
 }
 
+// ── Reports ───────────────────────────────────────────────────────────────────
 function renderReport() {
   const from = $('report-from').value;
-  const to = $('report-to').value;
-  const invoices = state.invoices.filter((inv) => (!from || inv.invoice_date >= from) && (!to || inv.invoice_date <= to));
-  const revenue = invoices.reduce((sum, inv) => sum + Number(inv.total || 0), 0);
-  const gst = invoices.reduce((sum, inv) => sum + Number(inv.gst_total || 0), 0);
+  const to   = $('report-to').value;
+  const invoices = state.invoices.filter((inv) =>
+    (!from || inv.invoice_date >= from) && (!to || inv.invoice_date <= to)
+  );
+  const revenue = invoices.reduce((s, inv) => s + Number(inv.total     || 0), 0);
+  const gst     = invoices.reduce((s, inv) => s + Number(inv.gst_total || 0), 0);
   $('report-preview').innerHTML = `
     <div class="stats-grid">
       <div class="stat"><span>Total sales</span><strong>₹${money(revenue)}</strong></div>
@@ -737,13 +878,17 @@ function renderReport() {
     </div>
     <table>
       <thead><tr><th>Invoice</th><th>Date</th><th>Type</th><th class="money">GST</th><th class="money">Total</th></tr></thead>
-      <tbody>${invoices.map((inv) => `<tr><td>${esc(inv.invoice_no)}</td><td>${esc(inv.invoice_date)}</td><td>${esc(inv.invoice_type)}</td><td class="money">₹${money(inv.gst_total)}</td><td class="money">₹${money(inv.total)}</td></tr>`).join('') || emptyRow(5, 'No invoices in this period')}</tbody>
-    </table>
-  `;
+      <tbody>${invoices.map((inv) =>
+        `<tr><td>${esc(inv.invoice_no)}</td><td>${esc(inv.invoice_date)}</td><td>${esc(inv.invoice_type)}</td><td class="money">₹${money(inv.gst_total)}</td><td class="money">₹${money(inv.total)}</td></tr>`
+      ).join('') || emptyRow(5, 'No invoices in this period')}</tbody>
+    </table>`;
 }
 
+// ── Utilities ─────────────────────────────────────────────────────────────────
 function listOrEmpty(items) {
-  return items.length ? `<div class="list">${items.join('')}</div>` : '<p class="muted">Nothing to show yet.</p>';
+  return items.length
+    ? `<div class="list">${items.join('')}</div>`
+    : '<p class="muted">Nothing to show yet.</p>';
 }
 
 function emptyRow(colspan, text) {
