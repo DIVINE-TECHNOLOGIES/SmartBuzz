@@ -206,7 +206,7 @@
             </div>
             <div class="table-wrap compact">
               <table>
-                <thead><tr><th>Item</th><th>Qty</th><th>Rate</th><th>GST</th><th>Total</th><th></th></tr></thead>
+                <thead><tr><th>Item</th><th>Qty</th><th>Rate</th><th>GST %</th><th style="text-align:right">Total</th><th></th></tr></thead>
                 <tbody id="bill-lines"></tbody>
               </table>
             </div>
@@ -601,8 +601,8 @@
       gap: 0.25rem;
     }
     .qr-img {
-      width: 90px;
-      height: 90px;
+      width: 70px;
+      height: 70px;
       object-fit: contain;
       border: 1px solid #e5e7eb;
       border-radius: 6px;
@@ -614,8 +614,9 @@
       color: #6b7280;
       margin: 0;
       text-align: center;
-      width: 90px;
+      width: 70px;
     }
+
     /* Also style inside the saved-invoice view modal */
     #inv-modal-body .qr-block { margin-top: 0.75rem; }
 
@@ -639,15 +640,17 @@
     </div>
   </dialog>
 
-  <!-- INVOICE EDIT DIALOG -->
+  <!-- INVOICE EDIT DIALOG — full editor -->
   <dialog id="invoice-edit-dialog" class="dialog">
-    <div class="dialog-card">
+    <div class="dialog-card" style="max-width:700px;width:92vw;">
       <div class="panel-head">
         <h3>Edit Invoice</h3>
         <button class="icon-btn" onclick="document.getElementById('invoice-edit-dialog').close()">✕</button>
       </div>
       <input type="hidden" id="edit-inv-id">
-      <div class="form-grid">
+
+      <!-- Header fields -->
+      <div class="form-grid" style="margin-bottom:1rem;">
         <label>Invoice Date<input id="edit-inv-date" type="date"></label>
         <label>Payment Mode
           <select id="edit-inv-payment">
@@ -655,7 +658,7 @@
           </select>
         </label>
         <label>Invoice Type
-          <select id="edit-inv-type">
+          <select id="edit-inv-type" onchange="renderEditLines()">
             <option value="tax_invoice">Tax Invoice</option>
             <option value="retail">Retail Invoice</option>
             <option value="proforma">Proforma</option>
@@ -664,8 +667,53 @@
         </label>
         <label class="wide">Notes<input id="edit-inv-notes" placeholder="Internal note (optional)"></label>
       </div>
-      <p class="hint" style="margin-top:0.5rem;">Note: item lines cannot be edited here. To change items, delete and recreate the invoice.</p>
-      <div class="action-row" style="margin-top:1rem;">
+
+      <!-- Line items table -->
+      <h4 style="margin:0 0 0.5rem;font-size:0.88em;font-weight:600;color:#374151;text-transform:uppercase;letter-spacing:0.05em;">Items</h4>
+      <div style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;margin-bottom:0.75rem;">
+        <div style="max-height:220px;overflow-y:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:0.88em;">
+            <thead style="position:sticky;top:0;background:#f9fafb;">
+              <tr>
+                <th style="padding:0.4rem 0.6rem;text-align:left;border-bottom:1px solid #e5e7eb;">Item</th>
+                <th style="padding:0.4rem 0.6rem;text-align:left;border-bottom:1px solid #e5e7eb;width:70px;">Qty</th>
+                <th style="padding:0.4rem 0.6rem;text-align:left;border-bottom:1px solid #e5e7eb;width:90px;">Price</th>
+                <th style="padding:0.4rem 0.6rem;text-align:center;border-bottom:1px solid #e5e7eb;width:55px;">GST</th>
+                <th style="padding:0.4rem 0.6rem;text-align:right;border-bottom:1px solid #e5e7eb;width:80px;">Total</th>
+                <th style="padding:0.4rem 0.6rem;border-bottom:1px solid #e5e7eb;width:30px;"></th>
+              </tr>
+            </thead>
+            <tbody id="edit-inv-lines"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Totals row -->
+      <div style="display:flex;justify-content:flex-end;gap:1.5rem;font-size:0.88em;margin-bottom:1rem;padding-right:0.25rem;">
+        <span>Subtotal <strong id="edit-inv-subtotal">₹0.00</strong></span>
+        <span>GST <strong id="edit-inv-gst">₹0.00</strong></span>
+        <span style="font-size:1em;">Total <strong id="edit-inv-total" style="font-size:1.1em;">₹0.00</strong></span>
+      </div>
+
+      <!-- Add item row -->
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:0.75rem;margin-bottom:1rem;">
+        <p style="margin:0 0 0.5rem;font-size:0.8em;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;">Add Item</p>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:flex-end;">
+          <label style="flex:2;min-width:140px;font-size:0.85em;">Product
+            <select id="edit-inv-product" onchange="onEditInvProductChange()" style="width:100%"></select>
+          </label>
+          <label style="flex:1.5;min-width:110px;font-size:0.85em;">Variant
+            <select id="edit-inv-variant" style="width:100%"></select>
+          </label>
+          <label style="width:60px;font-size:0.85em;">Qty
+            <input id="edit-inv-qty" type="number" min="1" value="1" style="width:100%">
+          </label>
+          <button class="btn ghost" onclick="addEditInvLine()" style="flex-shrink:0;align-self:flex-end;">+ Add</button>
+        </div>
+      </div>
+
+      <!-- Action buttons -->
+      <div class="action-row">
         <button class="btn ghost" style="color:#ef4444;border-color:#fca5a5;" onclick="deleteInvoice()">Delete Invoice</button>
         <div style="display:flex;gap:0.5rem;">
           <button class="btn ghost" onclick="document.getElementById('invoice-edit-dialog').close()">Cancel</button>

@@ -510,19 +510,30 @@ async function receiveStock() {
   }
 }
 
+function stockItemLabel(product, variant) {
+  // Build a clear label: "Product Name · Size M · Variant Blue"
+  const parts = [product?.name || 'Product'];
+  if (product?.size) parts.push('Size ' + product.size);
+  if (variant?.name) parts.push(variant.name);
+  return parts.join(' · ');
+}
+
 function renderStock() {
   $('stock-history').innerHTML = listOrEmpty(state.stockMovements.map((m) => {
     const product = state.products.find((p) => p.id === m.product_id);
     const variant = state.variants.find((v) => v.id === m.variant_id);
+    const label   = stockItemLabel(product, variant);
+    const pillClass = m.movement_type === 'sale' ? 'amber' : 'green';
+    const pillSign  = m.movement_type === 'sale' ? '−' : '+';
     return `<div class="list-item">
       <div>
-        <strong>${esc(product?.name || 'Product')}</strong>
-        <span>${esc(variant?.name || 'Base product')} · ${esc(m.received_date)}${m.source ? ' · ' + esc(m.source) : ''}</span>
+        <strong>${esc(label)}</strong>
+        <span>${esc(m.received_date)}${m.source ? ' · ' + esc(m.source) : ''}${m.movement_type === 'sale' ? ' · Sale' : ''}</span>
         ${m.notes ? `<span style="font-size:0.82em;color:#64748b">${esc(m.notes)}</span>` : ''}
       </div>
       <div style="display:flex;align-items:center;gap:0.5rem">
-        <span class="pill green">+${Number(m.quantity || 0)}</span>
-        <button class="text-btn" style="font-size:0.82em" onclick="editStockDialog('${m.id}')">Edit</button>
+        <span class="pill ${pillClass}">${pillSign}${Number(m.quantity || 0)}</span>
+        ${m.movement_type !== 'sale' ? `<button class="text-btn" style="font-size:0.82em" onclick="editStockDialog('${m.id}')">Edit</button>` : ''}
       </div>
     </div>`;
   }));
@@ -534,12 +545,12 @@ window.editStockDialog = function(movementId) {
   if (!m) return;
   const product = state.products.find((p) => p.id === m.product_id);
   const variant = state.variants.find((v) => v.id === m.variant_id);
-  $('edit-stock-id').value     = movementId;
-  $('edit-stock-item').textContent = (product?.name || 'Product') + (variant ? ' — ' + variant.name : '');
-  $('edit-stock-qty').value    = m.quantity || 1;
-  $('edit-stock-source').value = m.source || '';
-  $('edit-stock-date').value   = m.received_date || today();
-  $('edit-stock-notes').value  = m.notes || '';
+  $('edit-stock-id').value          = movementId;
+  $('edit-stock-item').textContent  = stockItemLabel(product, variant);
+  $('edit-stock-qty').value         = m.quantity || 1;
+  $('edit-stock-source').value      = m.source || '';
+  $('edit-stock-date').value        = m.received_date || today();
+  $('edit-stock-notes').value       = m.notes || '';
   $('stock-edit-dialog').showModal();
 };
 
@@ -647,21 +658,70 @@ function addBillLine() {
 
 function renderBillLines() {
   let subtotal = 0, gst = 0;
+  const isChallan = $('bill-type').value === 'challan';
   $('bill-lines').innerHTML = state.billLines.map((line, idx) => {
     const base = line.quantity * line.unit_price;
-    const tax  = $('bill-type').value === 'challan' ? 0 : base * line.gst_rate / 100;
+    const tax  = isChallan ? 0 : base * line.gst_rate / 100;
     subtotal += base; gst += tax;
     return `<tr>
       <td>${esc(line.name)}</td>
-      <td>${line.quantity}</td>
-      <td>₹${money(line.unit_price)}</td>
-      <td>${line.gst_rate}%</td>
-      <td>₹${money(base + tax)}</td>
-      <td><button class="text-btn" onclick="removeBillLine(${idx})">Remove</button></td>
+      <td>
+        <input type="number" min="1" value="${line.quantity}"
+          style="width:56px;padding:0.2rem 0.4rem;border:1px solid #e2e8f0;border-radius:4px;text-align:center"
+          onchange="updateBillQty(${idx}, this.value)"
+          title="Quantity">
+      </td>
+      <td>
+        <div style="display:flex;align-items:center;gap:2px">
+          <span style="color:#64748b;font-size:0.85em">₹</span>
+          <input type="number" min="0" step="0.01" value="${line.unit_price}"
+            style="width:80px;padding:0.2rem 0.4rem;border:1px solid #e2e8f0;border-radius:4px"
+            onchange="updateBillPrice(${idx}, this.value)"
+            title="Unit price">
+        </div>
+      </td>
+      <td>
+        <div style="display:flex;align-items:center;gap:2px">
+          <input type="number" min="0" max="28" step="0.01" value="${line.gst_rate}"
+            style="width:52px;padding:0.2rem 0.4rem;border:1px solid #e2e8f0;border-radius:4px;text-align:center"
+            onchange="updateBillGst(${idx}, this.value)"
+            title="GST %">
+          <span style="color:#64748b;font-size:0.85em">%</span>
+        </div>
+      </td>
+      <td style="text-align:right;font-weight:500">₹${money(base + tax)}</td>
+      <td><button class="text-btn" style="color:#ef4444" onclick="removeBillLine(${idx})">✕</button></td>
     </tr>`;
   }).join('') || emptyRow(6, 'No items added');
   renderInvoicePreview(subtotal, gst);
 }
+
+window.updateBillQty = function(idx, val) {
+  const qty = Math.max(1, Number(val) || 1);
+  const line = state.billLines[idx];
+  // Check stock availability
+  const product = state.products.find((p) => p.id === line.product_id);
+  const variant = state.variants.find((v) => v.id === line.variant_id);
+  const available = variant ? Number(variant.stock_qty || 0) : Number(product?.stock_qty || 0);
+  if (qty > available) {
+    toast(`Only ${available} in stock — quantity reset`);
+    renderBillLines(); // reset the input visually
+    return;
+  }
+  state.billLines[idx].quantity = qty;
+  renderBillLines();
+};
+
+window.updateBillPrice = function(idx, val) {
+  state.billLines[idx].unit_price = Math.max(0, Number(val) || 0);
+  renderBillLines();
+};
+
+window.updateBillGst = function(idx, val) {
+  const rate = Math.min(28, Math.max(0, Number(val) || 0));
+  state.billLines[idx].gst_rate = rate;
+  renderBillLines();
+};
 
 window.removeBillLine = function (index) {
   state.billLines.splice(index, 1);
@@ -884,16 +944,20 @@ window.viewInvoice = function(invoiceId) {
 
   let subtotal = 0, gstTotal = 0;
   const itemRows = items.map((item) => {
-    const product  = state.products.find((p) => p.id === item.product_id);
-    const variant  = state.variants.find((v) => v.id === item.variant_id);
-    const name     = variant ? `${product?.name || ''} - ${variant.name}` : (product?.name || 'Item');
-    const gstRate  = Number(product?.gst_rate || 0);
-    const base     = Number(item.quantity) * Number(item.unit_price);
-    const tax      = isChallan ? 0 : base * gstRate / 100;
+    // Use the names saved at sale time (product_name, variant_name stored in invoice_items)
+    // Fall back to live product state if missing (older records)
+    const product    = state.products.find((p) => p.id === item.product_id);
+    const savedName  = item.product_name || product?.name || 'Item';
+    const savedVar   = item.variant_name || null;
+    const size       = product?.size ? ' (Size ' + product.size + ')' : '';
+    const displayName = savedVar ? `${savedName}${size} — ${savedVar}` : `${savedName}${size}`;
+    const gstRate    = Number(item.gst_rate ?? product?.gst_rate ?? 0);
+    const base       = Number(item.quantity) * Number(item.unit_price);
+    const tax        = isChallan ? 0 : base * gstRate / 100;
     subtotal  += base;
     gstTotal  += tax;
     return `<tr>
-      <td>${esc(name)}</td>
+      <td>${esc(displayName)}</td>
       <td style="text-align:center">${item.quantity}</td>
       <td class="money">₹${money(item.unit_price)}</td>
       <td style="text-align:center">${isChallan ? '—' : gstRate + '%'}</td>
@@ -962,37 +1026,196 @@ function buildPrintHTML(bodyHTML) {
     .invoice-total p,.invoice-total strong{display:flex;justify-content:flex-end;gap:2rem;margin:.2rem 0}
     .invoice-total strong{font-size:1.1em;border-top:1px solid #333;padding-top:.4rem;margin-top:.4rem}
     .qr-block{display:inline-flex;flex-direction:column;align-items:flex-start;margin-top:.75rem;gap:.25rem}
-    .qr-img{width:90px;height:90px;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;padding:3px;background:#fff}
-    .qr-label{font-size:.72em;color:#6b7280;margin:0;text-align:center;width:90px}
+    .qr-img{width:70px;height:70px;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;padding:3px;background:#fff}
+    .qr-label{font-size:.72em;color:#6b7280;margin:0;text-align:center;width:70px}
     .preview-toolbar{display:none}
+    @page{size:A5;margin:14mm}
     @media print{body{padding:0}}
   </style></head><body>${bodyHTML}</body></html>`;
 }
 
-// ── Invoice edit dialog ───────────────────────────────────────────────────────
+
+// ── Invoice edit dialog — full editor ────────────────────────────────────────
+// editLines holds the mutable copy of invoice items while editing
+let editLines = [];
+
 window.editInvoiceDialog = function(invoiceId) {
-  const inv = state.invoices.find((i) => i.id === invoiceId);
+  const inv   = state.invoices.find((i) => i.id === invoiceId);
   if (!inv) return;
-  $('edit-inv-id').value           = invoiceId;
-  $('edit-inv-date').value         = inv.invoice_date || today();
-  $('edit-inv-payment').value      = inv.payment_mode || 'Cash';
-  $('edit-inv-type').value         = inv.invoice_type || 'tax_invoice';
-  $('edit-inv-notes').value        = inv.notes || '';
+
+  // Deep-copy the saved items so edits don't mutate state
+  editLines = state.invoiceItems
+    .filter((i) => i.invoice_id === invoiceId)
+    .map((i) => {
+      const product = state.products.find((p) => p.id === i.product_id);
+      const size    = product?.size ? ' (Size ' + product.size + ')' : '';
+      const label   = i.variant_name
+        ? `${i.product_name}${size} — ${i.variant_name}`
+        : `${i.product_name}${size}`;
+      return {
+        id:          i.id,           // existing DB row
+        product_id:  i.product_id,
+        variant_id:  i.variant_id,
+        name:        label,
+        quantity:    Number(i.quantity),
+        unit_price:  Number(i.unit_price),
+        gst_rate:    Number(i.gst_rate),
+        line_subtotal: Number(i.line_subtotal),
+        line_gst:    Number(i.line_gst),
+        line_total:  Number(i.line_total),
+      };
+    });
+
+  $('edit-inv-id').value      = invoiceId;
+  $('edit-inv-date').value    = inv.invoice_date || today();
+  $('edit-inv-payment').value = inv.payment_mode || 'Cash';
+  $('edit-inv-type').value    = inv.invoice_type || 'tax_invoice';
+  $('edit-inv-notes').value   = inv.notes || '';
+
+  // Populate add-item dropdowns
+  const opts = '<option value="">— Select product —</option>' +
+    state.products.map((p) => {
+      const sz = p.size ? ` (Size ${p.size})` : '';
+      return `<option value="${p.id}">${esc(p.name)}${sz} · Stock ${p.stock_qty}</option>`;
+    }).join('');
+  $('edit-inv-product').innerHTML = opts;
+  $('edit-inv-variant').innerHTML = '<option value="">Base product</option>';
+
+  renderEditLines();
   $('invoice-edit-dialog').showModal();
+};
+
+function renderEditLines() {
+  const isChallan = $('edit-inv-type').value === 'challan';
+  let subtotal = 0, gst = 0;
+  $('edit-inv-lines').innerHTML = editLines.map((line, idx) => {
+    const base = line.quantity * line.unit_price;
+    const tax  = isChallan ? 0 : base * line.gst_rate / 100;
+    subtotal += base; gst += tax;
+    return `<tr>
+      <td>${esc(line.name)}</td>
+      <td><input type="number" min="1" value="${line.quantity}" style="width:60px;padding:0.2rem 0.4rem"
+           onchange="updateEditLineQty(${idx}, this.value)"></td>
+      <td><input type="number" min="0" step="0.01" value="${line.unit_price}" style="width:80px;padding:0.2rem 0.4rem"
+           onchange="updateEditLinePrice(${idx}, this.value)"></td>
+      <td style="text-align:center">${isChallan ? '—' : line.gst_rate + '%'}</td>
+      <td class="money">₹${money(base + tax)}</td>
+      <td><button class="text-btn" style="color:#ef4444" onclick="removeEditLine(${idx})">✕</button></td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6" style="color:#999;text-align:center">No items</td></tr>';
+
+  $('edit-inv-subtotal').textContent = '₹' + money(subtotal);
+  $('edit-inv-gst').textContent      = isChallan ? '—' : '₹' + money(gst);
+  $('edit-inv-total').textContent    = '₹' + money(subtotal + gst);
+}
+
+window.updateEditLineQty = function(idx, val) {
+  editLines[idx].quantity = Math.max(1, Number(val) || 1);
+  renderEditLines();
+};
+window.updateEditLinePrice = function(idx, val) {
+  editLines[idx].unit_price = Math.max(0, Number(val) || 0);
+  renderEditLines();
+};
+window.removeEditLine = function(idx) {
+  editLines.splice(idx, 1);
+  renderEditLines();
+};
+
+// When product changes in the add-item row of the edit dialog
+window.onEditInvProductChange = function() {
+  const productId = $('edit-inv-product').value;
+  const vars = state.variants.filter((v) => v.product_id === productId);
+  $('edit-inv-variant').innerHTML = '<option value="">Base product</option>' +
+    vars.map((v) => `<option value="${v.id}">${esc(v.name)} · Stock ${v.stock_qty}</option>`).join('');
+};
+
+window.addEditInvLine = function() {
+  const product = state.products.find((p) => p.id === $('edit-inv-product').value);
+  if (!product) return toast('Select a product to add');
+  const variant = state.variants.find((v) => v.id === $('edit-inv-variant').value);
+  const qty     = Math.max(1, Number($('edit-inv-qty').value) || 1);
+  const price   = Number(variant?.selling_price || product.selling_price || 0);
+  const size    = product.size ? ` (Size ${product.size})` : '';
+  const label   = variant
+    ? `${product.name}${size} — ${variant.name}`
+    : `${product.name}${size}`;
+
+  // Merge if same product+variant already in list
+  const existing = editLines.find((l) =>
+    l.product_id === product.id && (l.variant_id || '') === (variant?.id || '')
+  );
+  if (existing) {
+    existing.quantity += qty;
+  } else {
+    editLines.push({
+      id: null,  // new line, no DB row yet
+      product_id: product.id,
+      variant_id: variant?.id || null,
+      name:       label,
+      quantity:   qty,
+      unit_price: price,
+      gst_rate:   Number(product.gst_rate || 0),
+    });
+  }
+  $('edit-inv-qty').value = 1;
+  renderEditLines();
 };
 
 window.saveInvoiceEdits = async function() {
   const id = $('edit-inv-id').value;
-  if (!id) return;
+  if (!id || !editLines.length) return toast('Invoice must have at least one item');
   setBusy(true);
   try {
-    const { error } = await state.client.from('invoices').update({
-      invoice_date:  $('edit-inv-date').value,
-      payment_mode:  $('edit-inv-payment').value,
-      invoice_type:  $('edit-inv-type').value,
-      notes:         $('edit-inv-notes').value.trim() || null,
+    const isChallan = $('edit-inv-type').value === 'challan';
+    let subtotal = 0, gstTotal = 0;
+
+    const newItems = editLines.map((line) => {
+      const base = line.quantity * line.unit_price;
+      const tax  = isChallan ? 0 : Math.round(base * line.gst_rate) / 100;
+      subtotal  += base;
+      gstTotal  += tax;
+      const product = state.products.find((p) => p.id === line.product_id);
+      const variant = state.variants.find((v) => v.id === line.variant_id);
+      return {
+        user_id:       state.session.user.id,
+        invoice_id:    id,
+        product_id:    line.product_id,
+        variant_id:    line.variant_id || null,
+        product_name:  product?.name || line.name,
+        variant_name:  variant?.name || null,
+        hsn:           product?.hsn || null,
+        quantity:      line.quantity,
+        unit_price:    line.unit_price,
+        gst_rate:      line.gst_rate,
+        line_subtotal: parseFloat(base.toFixed(2)),
+        line_gst:      parseFloat(tax.toFixed(2)),
+        line_total:    parseFloat((base + tax).toFixed(2)),
+      };
+    });
+    const total = subtotal + gstTotal;
+
+    // Delete old items and re-insert (simpler than diffing)
+    const { error: delErr } = await state.client
+      .from('invoice_items').delete().eq('invoice_id', id);
+    if (delErr) throw delErr;
+
+    const { error: insErr } = await state.client
+      .from('invoice_items').insert(newItems);
+    if (insErr) throw insErr;
+
+    // Update invoice header
+    const { error: updErr } = await state.client.from('invoices').update({
+      invoice_date: $('edit-inv-date').value,
+      payment_mode: $('edit-inv-payment').value,
+      invoice_type: $('edit-inv-type').value,
+      notes:        $('edit-inv-notes').value.trim() || null,
+      subtotal:     parseFloat(subtotal.toFixed(2)),
+      gst_total:    parseFloat(gstTotal.toFixed(2)),
+      total:        parseFloat(total.toFixed(2)),
     }).eq('id', id);
-    if (error) throw error;
+    if (updErr) throw updErr;
+
     $('invoice-edit-dialog').close();
     await refresh();
     toast('Invoice updated');
