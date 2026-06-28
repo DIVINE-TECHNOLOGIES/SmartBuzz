@@ -228,7 +228,7 @@
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>No.</th><th>Customer</th><th>Date</th><th>Items</th><th>GST</th><th>Total</th></tr></thead>
+              <thead><tr><th>No.</th><th>Customer</th><th>Date</th><th>Items</th><th>GST</th><th>Total</th><th>Actions</th></tr></thead>
               <tbody id="invoices-table"></tbody>
             </table>
           </div>
@@ -285,6 +285,28 @@
               <label class="wide">Address<input id="biz-address" placeholder="Address"></label>
             </div>
             <button id="save-business-btn" class="btn primary">Save Profile</button>
+
+            <!-- QR Code Upload -->
+            <div style="margin-top:1.5rem;padding-top:1.25rem;border-top:1px solid #e5e7eb;">
+              <h4 style="margin:0 0 0.6rem;font-size:0.9em;font-weight:600;color:#374151;">Payment QR Code</h4>
+              <p class="hint" style="margin:0 0 0.75rem;">Upload your UPI / payment QR code. It will appear on printed invoices.</p>
+              <div style="display:flex;align-items:flex-start;gap:1rem;flex-wrap:wrap;">
+                <!-- Preview box -->
+                <div id="qr-upload-zone" style="width:130px;height:130px;border:2px dashed #cbd5e1;border-radius:8px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;overflow:hidden;position:relative;">
+                  <div id="qr-empty" style="display:flex;flex-direction:column;align-items:center;gap:0.35rem;color:#94a3b8;font-size:0.8em;text-align:center;padding:0.5rem;">
+                    <span style="font-size:1.8em;">📷</span>
+                    <span>Click to upload</span>
+                  </div>
+                  <img id="qr-preview" src="" alt="QR Code" style="display:none;width:100%;height:100%;object-fit:contain;">
+                </div>
+                <div style="display:flex;flex-direction:column;gap:0.5rem;padding-top:0.25rem;">
+                  <input type="file" id="qr-file-input" accept="image/*" style="display:none;">
+                  <button type="button" class="btn ghost" onclick="document.getElementById('qr-file-input').click()">Upload QR Image</button>
+                  <button type="button" id="qr-remove-btn" class="btn ghost" style="color:#ef4444;border-color:#fca5a5;">Remove QR</button>
+                  <p style="font-size:0.78em;color:#94a3b8;margin:0;">PNG/JPG, max 2MB</p>
+                </div>
+              </div>
+            </div>
           </div>
           <div class="panel">
             <h3>Inventory Defaults</h3>
@@ -548,7 +570,135 @@
 
     /* ── Print: hide toolbar ── */
     @media print { .preview-toolbar { display: none !important; } }
+
+    /* ── Modals: wider dialog cards ── */
+    #invoice-view-dialog .dialog-card { max-width: 680px; width: 90vw; }
+    #inv-modal-body .invoice-head { display: flex; justify-content: space-between; border-bottom: 2px solid #333; padding-bottom: 0.75rem; margin-bottom: 0.75rem; }
+    #inv-modal-body .invoice-head h2 { margin: 0 0 0.2rem; font-size: 1.1em; }
+    #inv-modal-body .invoice-head p { margin: 0.1rem 0; font-size: 0.88em; color: #555; }
+    #inv-modal-body table { width: 100%; border-collapse: collapse; margin: 0.75rem 0; font-size: 0.9em; }
+    #inv-modal-body th, #inv-modal-body td { padding: 0.45rem 0.6rem; border: 1px solid #e5e7eb; text-align: left; }
+    #inv-modal-body th { background: #f9fafb; font-weight: 600; }
+    #inv-modal-body .money { text-align: right; }
+    #inv-modal-body .invoice-total { text-align: right; }
+    #inv-modal-body .invoice-total p,
+    #inv-modal-body .invoice-total strong { display: flex; justify-content: flex-end; gap: 2rem; margin: 0.2rem 0; font-size: 0.9em; }
+    #inv-modal-body .invoice-total strong { font-size: 1em; border-top: 1px solid #333; padding-top: 0.35rem; margin-top: 0.35rem; }
+    #inv-modal-body .customer-block { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 0.6rem 0.9rem; margin-bottom: 0.75rem; font-size: 0.88em; }
+    #inv-modal-body .customer-block h4 { margin: 0 0 0.25rem; font-size: 0.75em; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; }
+    #inv-modal-body .customer-block strong { display: block; }
+    #inv-modal-body .customer-block p { margin: 0.1rem 0; color: #4b5563; }
+
+    /* ── QR upload zone hover ── */
+    #qr-upload-zone:hover { border-color: #3b82f6; background: #eff6ff; }
+
+    /* ── Payment QR on invoice ── */
+    .qr-block {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: flex-start;
+      margin-top: 0.75rem;
+      gap: 0.25rem;
+    }
+    .qr-img {
+      width: 90px;
+      height: 90px;
+      object-fit: contain;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 3px;
+      background: #fff;
+    }
+    .qr-label {
+      font-size: 0.72em;
+      color: #6b7280;
+      margin: 0;
+      text-align: center;
+      width: 90px;
+    }
+    /* Also style inside the saved-invoice view modal */
+    #inv-modal-body .qr-block { margin-top: 0.75rem; }
+
+    /* ── Stock history edit button alignment ── */
+    #stock-history .list-item { align-items: flex-start; }
   </style>
+
+
+  <!-- INVOICE VIEW DIALOG -->
+  <dialog id="invoice-view-dialog" class="dialog">
+    <div class="dialog-card" style="max-width:680px;width:90vw;">
+      <div class="panel-head">
+        <h3>Invoice</h3>
+        <div style="display:flex;gap:0.5rem;align-items:center;">
+          <button class="btn ghost small" onclick="printViewedInvoice()">🖨 Print</button>
+          <button class="icon-btn" onclick="document.getElementById('invoice-view-dialog').close()">✕</button>
+        </div>
+      </div>
+      <input type="hidden" id="inv-modal-invoice-id">
+      <div id="inv-modal-body" style="max-height:70vh;overflow-y:auto;padding:0.25rem 0;"></div>
+    </div>
+  </dialog>
+
+  <!-- INVOICE EDIT DIALOG -->
+  <dialog id="invoice-edit-dialog" class="dialog">
+    <div class="dialog-card">
+      <div class="panel-head">
+        <h3>Edit Invoice</h3>
+        <button class="icon-btn" onclick="document.getElementById('invoice-edit-dialog').close()">✕</button>
+      </div>
+      <input type="hidden" id="edit-inv-id">
+      <div class="form-grid">
+        <label>Invoice Date<input id="edit-inv-date" type="date"></label>
+        <label>Payment Mode
+          <select id="edit-inv-payment">
+            <option>Cash</option><option>UPI</option><option>Card</option><option>Credit</option>
+          </select>
+        </label>
+        <label>Invoice Type
+          <select id="edit-inv-type">
+            <option value="tax_invoice">Tax Invoice</option>
+            <option value="retail">Retail Invoice</option>
+            <option value="proforma">Proforma</option>
+            <option value="challan">Delivery Challan</option>
+          </select>
+        </label>
+        <label class="wide">Notes<input id="edit-inv-notes" placeholder="Internal note (optional)"></label>
+      </div>
+      <p class="hint" style="margin-top:0.5rem;">Note: item lines cannot be edited here. To change items, delete and recreate the invoice.</p>
+      <div class="action-row" style="margin-top:1rem;">
+        <button class="btn ghost" style="color:#ef4444;border-color:#fca5a5;" onclick="deleteInvoice()">Delete Invoice</button>
+        <div style="display:flex;gap:0.5rem;">
+          <button class="btn ghost" onclick="document.getElementById('invoice-edit-dialog').close()">Cancel</button>
+          <button class="btn primary" onclick="saveInvoiceEdits()">Save Changes</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- STOCK EDIT DIALOG -->
+  <dialog id="stock-edit-dialog" class="dialog">
+    <div class="dialog-card">
+      <div class="panel-head">
+        <h3>Edit Stock Entry</h3>
+        <button class="icon-btn" onclick="document.getElementById('stock-edit-dialog').close()">✕</button>
+      </div>
+      <input type="hidden" id="edit-stock-id">
+      <p style="font-size:0.9em;color:#64748b;margin:0 0 1rem;"><strong id="edit-stock-item"></strong></p>
+      <div class="form-grid">
+        <label>Quantity<input id="edit-stock-qty" type="number" min="1"></label>
+        <label>Source<input id="edit-stock-source" placeholder="Supplier / vendor"></label>
+        <label>Date<input id="edit-stock-date" type="date"></label>
+        <label class="wide">Notes<input id="edit-stock-notes" placeholder="Optional"></label>
+      </div>
+      <div class="action-row" style="margin-top:1rem;">
+        <button class="btn ghost" style="color:#ef4444;border-color:#fca5a5;" onclick="deleteStockMovement()">Delete Entry</button>
+        <div style="display:flex;gap:0.5rem;">
+          <button class="btn ghost" onclick="document.getElementById('stock-edit-dialog').close()">Cancel</button>
+          <button class="btn primary" onclick="saveStockEdits()">Save Changes</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>

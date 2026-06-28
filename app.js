@@ -170,6 +170,7 @@ function wireAppEvents() {
 
   // Import dialog (defined in import.js)
   if (typeof wireImportEvents === 'function') wireImportEvents();
+  wireQrUpload();
 }
 
 // ── Authentication ────────────────────────────────────────────────────────────
@@ -513,9 +514,75 @@ function renderStock() {
   $('stock-history').innerHTML = listOrEmpty(state.stockMovements.map((m) => {
     const product = state.products.find((p) => p.id === m.product_id);
     const variant = state.variants.find((v) => v.id === m.variant_id);
-    return `<div class="list-item"><div><strong>${esc(product?.name || 'Product')}</strong><span>${esc(variant?.name || 'Base product')} · ${esc(m.received_date)}</span></div><span class="pill green">+${Number(m.quantity || 0)}</span></div>`;
+    return `<div class="list-item">
+      <div>
+        <strong>${esc(product?.name || 'Product')}</strong>
+        <span>${esc(variant?.name || 'Base product')} · ${esc(m.received_date)}${m.source ? ' · ' + esc(m.source) : ''}</span>
+        ${m.notes ? `<span style="font-size:0.82em;color:#64748b">${esc(m.notes)}</span>` : ''}
+      </div>
+      <div style="display:flex;align-items:center;gap:0.5rem">
+        <span class="pill green">+${Number(m.quantity || 0)}</span>
+        <button class="text-btn" style="font-size:0.82em" onclick="editStockDialog('${m.id}')">Edit</button>
+      </div>
+    </div>`;
   }));
 }
+
+// ── Stock edit dialog ─────────────────────────────────────────────────────────
+window.editStockDialog = function(movementId) {
+  const m = state.stockMovements.find((s) => s.id === movementId);
+  if (!m) return;
+  const product = state.products.find((p) => p.id === m.product_id);
+  const variant = state.variants.find((v) => v.id === m.variant_id);
+  $('edit-stock-id').value     = movementId;
+  $('edit-stock-item').textContent = (product?.name || 'Product') + (variant ? ' — ' + variant.name : '');
+  $('edit-stock-qty').value    = m.quantity || 1;
+  $('edit-stock-source').value = m.source || '';
+  $('edit-stock-date').value   = m.received_date || today();
+  $('edit-stock-notes').value  = m.notes || '';
+  $('stock-edit-dialog').showModal();
+};
+
+window.saveStockEdits = async function() {
+  const id  = $('edit-stock-id').value;
+  const qty = Number($('edit-stock-qty').value || 0);
+  if (!id || qty <= 0) return toast('Quantity must be greater than zero');
+  setBusy(true);
+  try {
+    const { error } = await state.client.from('stock_movements').update({
+      quantity:      qty,
+      source:        $('edit-stock-source').value.trim() || null,
+      received_date: $('edit-stock-date').value || today(),
+      notes:         $('edit-stock-notes').value.trim() || null,
+    }).eq('id', id);
+    if (error) throw error;
+    $('stock-edit-dialog').close();
+    await refresh();
+    toast('Stock record updated');
+  } catch (err) {
+    toast(err.message || 'Could not update stock record');
+  } finally {
+    setBusy(false);
+  }
+};
+
+window.deleteStockMovement = async function() {
+  const id = $('edit-stock-id').value;
+  if (!id) return;
+  if (!confirm('Delete this stock entry? The actual stock count will not change automatically.')) return;
+  setBusy(true);
+  try {
+    const { error } = await state.client.from('stock_movements').delete().eq('id', id);
+    if (error) throw error;
+    $('stock-edit-dialog').close();
+    await refresh();
+    toast('Stock record deleted');
+  } catch (err) {
+    toast(err.message || 'Could not delete stock record');
+  } finally {
+    setBusy(false);
+  }
+};
 
 // ── Billing ───────────────────────────────────────────────────────────────────
 function renderBilling() {
@@ -702,15 +769,28 @@ function printInvoicePreview() {
   setTimeout(() => { win.print(); }, 400);
 }
 
+function buildQrHTML(qrUrl) {
+  if (!qrUrl) return '';
+  return `
+    <div class="qr-block">
+      <img src="${esc(qrUrl)}" alt="Payment QR" class="qr-img">
+      <p class="qr-label">Scan to Pay</p>
+    </div>`;
+}
+
 function renderInvoicePreview(subtotal = 0, gst = 0) {
   const business  = state.business || {};
   const total     = subtotal + gst;
   const isChallan = $('bill-type').value === 'challan';
   const customer  = getCustomerInfo();
+  const qrUrl     = business.payment_qr_url || null;
 
-  // Customer block HTML (only if we have at least a name)
+  // QR shown in the business header block (top-right, below invoice meta)
+  const qrHTML = buildQrHTML(qrUrl);
+
+  // Customer block (only if we have at least a name)
   const custHTML = customer.name ? `
-    <div class="customer-block print-only-show">
+    <div class="customer-block">
       <h4>Bill To</h4>
       <strong>${esc(customer.name)}</strong>
       ${customer.phone   ? `<p>${esc(customer.phone)}</p>`   : ''}
@@ -730,6 +810,7 @@ function renderInvoicePreview(subtotal = 0, gst = 0) {
           <p>${esc(business.address || '')}</p>
           <p>${esc(business.phone || '')}${business.email ? ' | ' + esc(business.email) : ''}</p>
           <p>${business.gstin ? 'GSTIN: ' + esc(business.gstin) : ''}</p>
+          ${qrHTML}
         </div>
         <div style="text-align:right">
           <h2>${$('bill-type').selectedOptions[0]?.textContent || 'Invoice'}</h2>
@@ -772,10 +853,175 @@ function renderInvoices() {
         <td>${count}</td>
         <td>₹${money(inv.gst_total)}</td>
         <td><strong>₹${money(inv.total)}</strong></td>
+        <td style="white-space:nowrap">
+          <button class="text-btn" onclick="viewInvoice('${inv.id}')">View</button>
+          <button class="text-btn" style="margin-left:0.4rem" onclick="editInvoiceDialog('${inv.id}')">Edit</button>
+        </td>
       </tr>`;
     });
-  $('invoices-table').innerHTML = rows.join('') || emptyRow(6, 'No invoices yet');
+  $('invoices-table').innerHTML = rows.join('') || emptyRow(7, 'No invoices yet');
 }
+
+// ── Invoice view (print-ready modal) ─────────────────────────────────────────
+window.viewInvoice = function(invoiceId) {
+  const inv      = state.invoices.find((i) => i.id === invoiceId);
+  if (!inv) return;
+  const items    = state.invoiceItems.filter((i) => i.invoice_id === invoiceId);
+  const customer = state.customers.find((c) => c.id === inv.customer_id);
+  const business = state.business || {};
+  const isChallan = inv.invoice_type === 'challan';
+  const qrUrl    = state.business?.payment_qr_url || null;
+  const qrHTML   = buildQrHTML(qrUrl);
+
+  const custHTML = customer ? `
+    <div class="customer-block">
+      <h4>Bill To</h4>
+      <strong>${esc(customer.name)}</strong>
+      ${customer.phone   ? `<p>${esc(customer.phone)}</p>`   : ''}
+      ${customer.address ? `<p>${esc(customer.address)}</p>` : ''}
+      ${customer.gstin   ? `<p>GSTIN: ${esc(customer.gstin)}</p>` : ''}
+    </div>` : '';
+
+  let subtotal = 0, gstTotal = 0;
+  const itemRows = items.map((item) => {
+    const product  = state.products.find((p) => p.id === item.product_id);
+    const variant  = state.variants.find((v) => v.id === item.variant_id);
+    const name     = variant ? `${product?.name || ''} - ${variant.name}` : (product?.name || 'Item');
+    const gstRate  = Number(product?.gst_rate || 0);
+    const base     = Number(item.quantity) * Number(item.unit_price);
+    const tax      = isChallan ? 0 : base * gstRate / 100;
+    subtotal  += base;
+    gstTotal  += tax;
+    return `<tr>
+      <td>${esc(name)}</td>
+      <td style="text-align:center">${item.quantity}</td>
+      <td class="money">₹${money(item.unit_price)}</td>
+      <td style="text-align:center">${isChallan ? '—' : gstRate + '%'}</td>
+      <td class="money">₹${money(base + tax)}</td>
+    </tr>`;
+  }).join('');
+  const total = subtotal + gstTotal;
+
+  // qrHTML built by buildQrHTML() called above
+
+  const html = `
+    <div class="invoice-head">
+      <div>
+        <h2>${esc(business.name || 'Your Business')}</h2>
+        ${business.address ? `<p>${esc(business.address)}</p>` : ''}
+        ${business.phone   ? `<p>${esc(business.phone)}${business.email ? ' | ' + esc(business.email) : ''}</p>` : ''}
+        ${business.gstin   ? `<p>GSTIN: ${esc(business.gstin)}</p>` : ''}
+      </div>
+      <div style="text-align:right">
+        <h2>${esc(inv.invoice_type?.replace('_', ' ').toUpperCase() || 'INVOICE')}</h2>
+        <p><strong>${esc(inv.invoice_no)}</strong></p>
+        <p>Date: ${esc(inv.invoice_date)}</p>
+        <p>Payment: ${esc(inv.payment_mode || '')}</p>
+      </div>
+    </div>
+    ${custHTML}
+    <table>
+      <thead><tr><th>Item</th><th style="text-align:center">Qty</th><th class="money">Rate</th><th style="text-align:center">GST</th><th class="money">Amount</th></tr></thead>
+      <tbody>${itemRows || '<tr><td colspan="5" style="color:#999">No items</td></tr>'}</tbody>
+    </table>
+    <div class="invoice-total"><div>
+      <p><span>Subtotal</span><span>₹${money(subtotal)}</span></p>
+      ${!isChallan ? `<p><span>GST</span><span>₹${money(gstTotal)}</span></p>` : ''}
+      <strong><span>Total</span><span>₹${money(total)}</span></strong>
+    </div></div>
+    ${qrHTML}`;
+
+  $('inv-modal-body').innerHTML = html;
+  $('inv-modal-invoice-id').value = invoiceId;
+  $('invoice-view-dialog').showModal();
+};
+
+// Print from view modal
+window.printViewedInvoice = function() {
+  const body     = $('inv-modal-body').innerHTML;
+  const business = state.business || {};
+  const win = window.open('', '_blank', 'width=820,height=750');
+  win.document.write(buildPrintHTML(body));
+  win.document.close();
+  win.focus();
+  setTimeout(() => win.print(), 400);
+};
+
+function buildPrintHTML(bodyHTML) {
+  return `<!DOCTYPE html><html><head><title>Invoice</title><style>
+    body{font-family:Arial,sans-serif;font-size:13px;padding:2rem;color:#111}
+    h2{margin:0 0 .25rem}p{margin:.15rem 0}
+    table{width:100%;border-collapse:collapse;margin:1rem 0}
+    th,td{padding:.5rem .6rem;border:1px solid #ddd;text-align:left}
+    th{background:#f5f5f5;font-weight:600}
+    .money{text-align:right}
+    .invoice-head{display:flex;justify-content:space-between;border-bottom:2px solid #333;padding-bottom:1rem;margin-bottom:1rem}
+    .customer-block{background:#f9f9f9;border:1px solid #ddd;border-radius:4px;padding:.75rem 1rem;margin-bottom:1rem}
+    .customer-block h4{margin:0 0 .4rem;font-size:.85em;color:#666;text-transform:uppercase;letter-spacing:.05em}
+    .invoice-total{text-align:right;margin-top:.5rem}
+    .invoice-total p,.invoice-total strong{display:flex;justify-content:flex-end;gap:2rem;margin:.2rem 0}
+    .invoice-total strong{font-size:1.1em;border-top:1px solid #333;padding-top:.4rem;margin-top:.4rem}
+    .qr-block{display:inline-flex;flex-direction:column;align-items:flex-start;margin-top:.75rem;gap:.25rem}
+    .qr-img{width:90px;height:90px;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;padding:3px;background:#fff}
+    .qr-label{font-size:.72em;color:#6b7280;margin:0;text-align:center;width:90px}
+    .preview-toolbar{display:none}
+    @media print{body{padding:0}}
+  </style></head><body>${bodyHTML}</body></html>`;
+}
+
+// ── Invoice edit dialog ───────────────────────────────────────────────────────
+window.editInvoiceDialog = function(invoiceId) {
+  const inv = state.invoices.find((i) => i.id === invoiceId);
+  if (!inv) return;
+  $('edit-inv-id').value           = invoiceId;
+  $('edit-inv-date').value         = inv.invoice_date || today();
+  $('edit-inv-payment').value      = inv.payment_mode || 'Cash';
+  $('edit-inv-type').value         = inv.invoice_type || 'tax_invoice';
+  $('edit-inv-notes').value        = inv.notes || '';
+  $('invoice-edit-dialog').showModal();
+};
+
+window.saveInvoiceEdits = async function() {
+  const id = $('edit-inv-id').value;
+  if (!id) return;
+  setBusy(true);
+  try {
+    const { error } = await state.client.from('invoices').update({
+      invoice_date:  $('edit-inv-date').value,
+      payment_mode:  $('edit-inv-payment').value,
+      invoice_type:  $('edit-inv-type').value,
+      notes:         $('edit-inv-notes').value.trim() || null,
+    }).eq('id', id);
+    if (error) throw error;
+    $('invoice-edit-dialog').close();
+    await refresh();
+    toast('Invoice updated');
+  } catch (err) {
+    toast(err.message || 'Could not update invoice');
+  } finally {
+    setBusy(false);
+  }
+};
+
+window.deleteInvoice = async function() {
+  const id = $('edit-inv-id').value;
+  if (!id) return;
+  if (!confirm('Delete this invoice? This cannot be undone.')) return;
+  setBusy(true);
+  try {
+    // Delete items first (foreign key)
+    await state.client.from('invoice_items').delete().eq('invoice_id', id);
+    const { error } = await state.client.from('invoices').delete().eq('id', id);
+    if (error) throw error;
+    $('invoice-edit-dialog').close();
+    await refresh();
+    toast('Invoice deleted');
+  } catch (err) {
+    toast(err.message || 'Could not delete invoice');
+  } finally {
+    setBusy(false);
+  }
+};
 
 // ── Customers ─────────────────────────────────────────────────────────────────
 async function saveCustomer() {
@@ -817,6 +1063,18 @@ function hydrateSettings() {
   $('set-low-stock').value = state.settings.low_stock_threshold || 10;
   $('set-gst').value       = state.settings.default_gst  || 12;
   $('set-unit').value      = state.settings.default_unit || 'pcs';
+  // QR preview
+  const qrUrl = state.business?.payment_qr_url || null;
+  const qrPreview = $('qr-preview');
+  const qrEmpty   = $('qr-empty');
+  if (qrUrl) {
+    qrPreview.src = qrUrl;
+    qrPreview.style.display = 'block';
+    if (qrEmpty) qrEmpty.style.display = 'none';
+  } else {
+    qrPreview.style.display = 'none';
+    if (qrEmpty) qrEmpty.style.display = 'flex';
+  }
 }
 
 async function saveBusiness() {
@@ -829,8 +1087,13 @@ async function saveBusiness() {
       phone:   $('biz-phone').value.trim()   || null,
       email:   $('biz-email').value.trim()   || null,
       address: $('biz-address').value.trim() || null,
+      // QR code stored as base64 data URL; only update if changed
+      payment_qr_url: state._pendingQrUrl !== undefined
+        ? state._pendingQrUrl
+        : (state.business?.payment_qr_url || null),
     };
     const { error } = await state.client.from('business_profiles').upsert(payload, { onConflict: 'user_id' });
+    if (!error) state._pendingQrUrl = undefined; // clear pending
     if (error) throw error;
     await refresh();
     toast('Business profile saved');
@@ -893,6 +1156,44 @@ function listOrEmpty(items) {
 
 function emptyRow(colspan, text) {
   return `<tr><td colspan="${colspan}" class="muted">${text}</td></tr>`;
+}
+
+// ── QR code upload ───────────────────────────────────────────────────────────
+function wireQrUpload() {
+  const input   = $('qr-file-input');
+  const preview = $('qr-preview');
+  const empty   = $('qr-empty');
+  const removeBtn = $('qr-remove-btn');
+
+  if (!input) return;
+
+  // Click on the zone triggers file picker
+  $('qr-upload-zone')?.addEventListener('click', () => input.click());
+
+  input.addEventListener('change', () => {
+    const file = input.files[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) return toast('QR image must be under 2MB');
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const dataUrl = e.target.result;
+      state._pendingQrUrl = dataUrl;
+      preview.src = dataUrl;
+      preview.style.display = 'block';
+      if (empty) empty.style.display = 'none';
+      toast('QR loaded — click Save Profile to apply');
+    };
+    reader.readAsDataURL(file);
+    input.value = ''; // reset so same file can be re-selected
+  });
+
+  removeBtn?.addEventListener('click', () => {
+    state._pendingQrUrl = null;
+    preview.src = '';
+    preview.style.display = 'none';
+    if (empty) empty.style.display = 'flex';
+    toast('QR removed — click Save Profile to apply');
+  });
 }
 
 boot();
