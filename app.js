@@ -178,7 +178,6 @@ function wireAppEvents() {
   // If we already have a session (e.g., hot reload), make role UI correct
   applyRoleUI();
 
-
   // Import dialog (defined in import.js)
   if (typeof wireImportEvents === 'function') wireImportEvents();
   wireQrUpload();
@@ -239,6 +238,7 @@ async function handleAuth() {
 
     // Wire app events now that we have a client + session
     wireAppEvents();
+    await detectRole();
     await enterApp();
   } catch (err) {
     toast(err.message || 'Authentication failed');
@@ -261,6 +261,29 @@ async function enterApp() {
 async function detectRole() {
   // Determine role by checking if user is mapped as an employee.
   // If mapped → employee, else → owner.
+  async function detectRole() {
+    try {
+      const userId = state.session.user.id;
+  
+      const { data, error } = await state.client
+        .from('employee_profiles')
+        .select('*')
+        .eq('employee_user_id', userId);
+  
+      console.log("Current User:", userId);
+      console.log("Employee Record:", data);
+      console.log("Error:", error);
+  
+      if (error) throw error;
+  
+      state.role = data.length ? 'employee' : 'owner';
+      console.log("Detected Role:", state.role);
+  
+    } catch (e) {
+      console.error(e);
+      state.role = 'owner';
+    }
+  }
   try {
     const userId = state.session.user.id;
     const { data, error } = await state.client
