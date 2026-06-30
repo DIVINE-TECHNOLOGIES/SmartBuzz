@@ -1,5 +1,15 @@
-- [ ] Create a new Supabase project
-- [ ] Run `supabase-schema.sql` in the Supabase SQL editor
-- [ ] Enable Email auth in Supabase Authentication settings
-- [ ] Open `index.html` and save the Project URL + anon public key
-- [ ] Create an account and test product, stock, customer, and invoice flows
+- [ ] Plan approved: implement Owner vs Employee dashboards with DB-level RBAC/RLS
+- [ ] Update `supabase-schema.sql`:
+  - [ ] Add employee mapping table (owner_user_id <-> employee_user_id)
+  - [ ] Update RLS policies for all relevant tables for employee access
+  - [ ] Update RPC `receive_stock` and `create_invoice` to authorize via mapping
+- [ ] Update `index.html` + `app.js`:
+  - [ ] Add role detection after login
+  - [ ] Hide/disable nav + pages for employee role
+  - [ ] Guard navigation/rendering to prevent unauthorized access
+- [ ] Add owner UI section to grant employee access (email/link by user id)
+- [ ] Testing:
+  - [ ] Owner can access all sections
+  - [ ] Employee can use Products/Add Stock/Billing per permissions
+  - [ ] Employee cannot access Customers/Reports/Settings/owner-only actions
+

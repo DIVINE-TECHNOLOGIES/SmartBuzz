@@ -191,6 +191,71 @@ begin
 end $$;
 
 -- =========================
+-- Owner / Employee mapping (DB-level)
+-- =========================
+create table if not exists public.employee_profiles (
+  id uuid primary key default gen_random_uuid(),
+  owner_user_id uuid not null references auth.users(id) on delete cascade,
+  employee_user_id uuid not null unique references auth.users(id) on delete cascade,
+  role text not null default 'employee' check (role in ('employee')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(owner_user_id, employee_user_id)
+);
+
+-- updated_at trigger for employee_profiles
+alter table public.employee_profiles enable row level security;
+create or replace function public.touch_updated_at_employee_profiles()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+drop trigger if exists touch_employee_profiles_updated_at on public.employee_profiles;
+create trigger touch_employee_profiles_updated_at
+before update on public.employee_profiles
+for each row execute function public.touch_updated_at_employee_profiles();
+
+-- Resolve the "owner_user_id" for the current session.
+-- Returns NULL for owners that are not mapped (i.e., owner is owner_user_id).
+create or replace function public.owner_for_current_user()
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user uuid := auth.uid();
+  v_owner uuid;
+begin
+  if v_user is null then
+    return null;
+  end if;
+
+  -- If user is mapped as an employee, return the linked owner
+  select owner_user_id into v_owner
+  from public.employee_profiles
+  where employee_user_id = v_user;
+
+  return v_owner;
+end;
+$$;
+
+-- Owner policies can be expressed as: effective_owner_id = coalesce(owner_for_current_user(), auth.uid())
+create or replace function public.effective_owner_id()
+returns uuid
+language sql
+security definer
+set search_path = public
+as $$
+  select coalesce(public.owner_for_current_user(), auth.uid());
+$$;
+
+-- =========================
 -- RLS
 -- =========================
 alter table public.business_profiles enable row level security;
@@ -202,6 +267,29 @@ alter table public.stock_movements enable row level security;
 alter table public.invoice_counters enable row level security;
 alter table public.invoices enable row level security;
 alter table public.invoice_items enable row level security;
+
+-- employee_profiles RLS
+-- Owners can see/manage their linked employees. Employees can only see their own mapping.
+do $$
+declare
+begin
+  drop policy if exists employee_profiles_select on public.employee_profiles;
+  drop policy if exists employee_profiles_insert on public.employee_profiles;
+  drop policy if exists employee_profiles_update on public.employee_profiles;
+  drop policy if exists employee_profiles_delete on public.employee_profiles;
+
+  create policy employee_profiles_select on public.employee_profiles
+    for select using (owner_user_id = auth.uid() or employee_user_id = auth.uid());
+
+  create policy employee_profiles_insert on public.employee_profiles
+    for insert with check (owner_user_id = auth.uid());
+
+  create policy employee_profiles_update on public.employee_profiles
+    for update using (owner_user_id = auth.uid()) with check (owner_user_id = auth.uid());
+
+  create policy employee_profiles_delete on public.employee_profiles
+    for delete using (owner_user_id = auth.uid());
+end $$;
 
 do $$
 declare
@@ -221,19 +309,22 @@ begin
     execute format('drop policy if exists %I on public.%I', t || '_insert_own', t);
     execute format('drop policy if exists %I on public.%I', t || '_update_own', t);
     execute format('drop policy if exists %I on public.%I', t || '_delete_own', t);
-    execute format('create policy %I on public.%I for select using (user_id = auth.uid())', t || '_select_own', t);
-    execute format('create policy %I on public.%I for insert with check (user_id = auth.uid())', t || '_insert_own', t);
-    execute format('create policy %I on public.%I for update using (user_id = auth.uid()) with check (user_id = auth.uid())', t || '_update_own', t);
-    execute format('create policy %I on public.%I for delete using (user_id = auth.uid())', t || '_delete_own', t);
+
+    -- Effective owner means: if user is mapped employee -> operate on owner's rows
+    execute format('create policy %I on public.%I for select using (user_id = public.effective_owner_id())', t || '_select_own', t);
+    execute format('create policy %I on public.%I for insert with check (user_id = public.effective_owner_id())', t || '_insert_own', t);
+    execute format('create policy %I on public.%I for update using (user_id = public.effective_owner_id()) with check (user_id = public.effective_owner_id())', t || '_update_own', t);
+    execute format('create policy %I on public.%I for delete using (user_id = public.effective_owner_id())', t || '_delete_own', t);
   end loop;
 end $$;
 
 drop policy if exists invoice_counters_select_own on public.invoice_counters;
 drop policy if exists invoice_counters_insert_own on public.invoice_counters;
 drop policy if exists invoice_counters_update_own on public.invoice_counters;
-create policy invoice_counters_select_own on public.invoice_counters for select using (user_id = auth.uid());
-create policy invoice_counters_insert_own on public.invoice_counters for insert with check (user_id = auth.uid());
-create policy invoice_counters_update_own on public.invoice_counters for update using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy invoice_counters_select_own on public.invoice_counters for select using (user_id = public.effective_owner_id());
+create policy invoice_counters_insert_own on public.invoice_counters for insert with check (user_id = public.effective_owner_id());
+create policy invoice_counters_update_own on public.invoice_counters for update using (user_id = public.effective_owner_id()) with check (user_id = public.effective_owner_id());
+
 
 -- =========================
 -- Indexes
@@ -269,6 +360,13 @@ begin
   if v_user is null then
     raise exception 'Not authenticated';
   end if;
+
+  -- Employees execute on behalf of their linked owner
+  v_user := public.effective_owner_id();
+  if v_user is null then
+    raise exception 'No owner mapping for current user';
+  end if;
+
   if p_quantity is null or p_quantity <= 0 then
     raise exception 'Quantity must be greater than zero';
   end if;
@@ -347,7 +445,15 @@ begin
   if v_user is null then
     raise exception 'Not authenticated';
   end if;
+
+  -- Employees execute on behalf of their linked owner
+  v_user := public.effective_owner_id();
+  if v_user is null then
+    raise exception 'No owner mapping for current user';
+  end if;
+
   if jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
+
     raise exception 'Invoice needs at least one item';
   end if;
 
@@ -466,7 +572,9 @@ exception
 end;
 $$;
 
+-- Employees need to execute stock receive + invoice creation on behalf of the linked owner
 grant execute on function public.receive_stock(uuid, uuid, integer, text, text, date) to authenticated;
 grant execute on function public.create_invoice(uuid, date, text, text, jsonb) to authenticated;
+
 
 notify pgrst, 'reload schema';

@@ -19,7 +19,7 @@ function openImportDialog() {
 
   showImportStep('upload');
   $('import-file-info').classList.add('hidden');
-  $('import-file-input').value = '';
+  $('import-file-input').value = null;
   $('import-preview-btn').disabled = true;
 
   $('import-dialog').showModal();
@@ -71,7 +71,7 @@ function wireImportEvents() {
   $('import-file-change').addEventListener('click', () => {
     importState.file = null;
     $('import-file-info').classList.add('hidden');
-    fileInput.value = '';
+    fileInput.value = null;
     $('import-preview-btn').disabled = true;
   });
 
@@ -108,7 +108,9 @@ function parseImportFile(file) {
         const data = new Uint8Array(e.target.result);
         const workbook = XLSX.read(data, { type: 'array' });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+        // raw:false preserves text-formatted values (e.g. "30X40" sizes)
+        // instead of letting Excel/SheetJS coerce them to numbers/dates.
+        const rows = XLSX.utils.sheet_to_json(sheet, { defval: null, raw: false });
         resolve(rows);
       } catch (err) {
         reject(new Error('Could not parse file: ' + err.message));
@@ -164,19 +166,19 @@ function validateRow(mapped) {
   if (!name) errors.push('Missing product name');
 
   const priceRaw = mapped.selling_price;
-  if (priceRaw === undefined || priceRaw === '') {
+  if (priceRaw === undefined || priceRaw === null || String(priceRaw).trim() === '') {
     warnings.push('No selling price — will default to 0');
   } else {
     const price = Number(priceRaw);
     if (isNaN(price) || price < 0) errors.push('Invalid selling price');
   }
 
-  if (mapped.gst_rate !== undefined && mapped.gst_rate !== '') {
+  if (mapped.gst_rate !== undefined && mapped.gst_rate !== null && String(mapped.gst_rate).trim() !== '') {
     const gst = Number(mapped.gst_rate);
     if (isNaN(gst) || gst < 0 || gst > 100) warnings.push('GST rate looks unusual');
   }
 
-  if (mapped.stock_qty !== undefined && mapped.stock_qty !== '') {
+  if (mapped.stock_qty !== undefined && mapped.stock_qty !== null && String(mapped.stock_qty).trim() !== '') {
     const qty = Number(mapped.stock_qty);
     if (isNaN(qty) || qty < 0) warnings.push('Invalid stock quantity — will default to 0');
   }
@@ -197,9 +199,25 @@ async function runImportValidation() {
     let successCount = 0, errorCount = 0, warnCount = 0;
     importState.validRows = [];
 
+    // Track sku+size combos seen so far in THIS file so we can warn about
+    // duplicate rows within the same upload (these will be merged on import
+    // via upsert, but it's worth surfacing to the user).
+    const seenKeys = new Set();
+
     const tbodyRows = rows.map((raw, i) => {
       const mapped = mapRowKeys(raw);
       const { errors, warnings } = validateRow(mapped);
+
+      const skuKey  = String(mapped.sku || '').trim().toLowerCase();
+      const sizeKey = String(mapped.size || '').trim().toLowerCase();
+      const dupeKey = skuKey ? `${skuKey}::${sizeKey}` : null;
+      if (dupeKey) {
+        if (seenKeys.has(dupeKey)) {
+          warnings.push('Duplicate SKU+Size in this file — later row will overwrite earlier one');
+        }
+        seenKeys.add(dupeKey);
+      }
+
       const hasError = errors.length > 0;
 
       if (hasError) {
@@ -265,22 +283,45 @@ async function runImportConfirm() {
     $('import-current-item').textContent = `Importing: ${name}`;
 
     try {
+      const sellingPriceRaw = row.selling_price;
+      const sellingPrice = (sellingPriceRaw === undefined || sellingPriceRaw === null || String(sellingPriceRaw).trim() === '')
+        ? 0
+        : Number(sellingPriceRaw) || 0;
+
+      const mrpRaw = row.mrp;
+      const mrp = (mrpRaw === undefined || mrpRaw === null || String(mrpRaw).trim() === '')
+        ? sellingPrice
+        : (Number(mrpRaw) || sellingPrice);
+
       const payload = {
         name,
         sku:            String(row.sku || '').trim() || null,
         size:           String(row.size || '').trim() || null,
         category:       String(row.category || '').trim() || 'General',
         unit:           String(row.unit || defaultUnit).trim() || 'pcs',
-        selling_price:  Number(row.selling_price) || 0,
-        purchase_price: Number(row.purchase_price) || 0,
-        mrp:            Number(row.mrp) || Number(row.selling_price) || 0,
-        gst_rate:       (row.gst_rate !== undefined && row.gst_rate !== '') ? Number(row.gst_rate) : defaultGst,
+        selling_price:  sellingPrice,
+        purchase_price: (row.purchase_price === undefined || row.purchase_price === null || String(row.purchase_price).trim() === '')
+                          ? 0 : (Number(row.purchase_price) || 0),
+        mrp,
+        gst_rate:       (row.gst_rate !== undefined && row.gst_rate !== null && String(row.gst_rate).trim() !== '')
+                          ? Number(row.gst_rate) : defaultGst,
         hsn:            String(row.hsn || '').trim() || null,
-        stock_qty:      Math.max(0, Math.floor(Number(row.stock_qty) || 0)),
+        stock_qty:      Math.max(0, Math.floor(
+                          (row.stock_qty === undefined || row.stock_qty === null || String(row.stock_qty).trim() === '')
+                            ? 0 : (Number(row.stock_qty) || 0)
+                        )),
         expiry_date:    parseImportDate(row.expiry_date),
       };
 
-      const { error } = await state.client.from('products').insert(payload);
+      // Use upsert instead of insert so rows that collide on the
+      // (user_id, sku, size) unique constraint update the existing
+      // product instead of failing the whole row. This also means
+      // re-running an import with corrected data is safe to repeat.
+      let query = state.client.from('products');
+      const { error } = payload.sku
+        ? await query.upsert(payload, { onConflict: 'user_id,sku,size' })
+        : await query.insert(payload); // no SKU -> can't dedupe, just insert
+
       if (error) throw error;
       results.push({ name, status: 'success', detail: 'Imported' });
     } catch (err) {

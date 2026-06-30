@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SmartBuzz Inventory</title>
+  <title>SmartBuzz </title>
   <link rel="icon" type="image/x-icon" href="Images/Favicon.ico">
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -308,6 +308,21 @@
               </div>
             </div>
           </div>
+          <div class="panel">
+            <h3>Employees</h3>
+            <p class="hint" style="margin-top:4px;">Owner-only: link an existing employee auth user by UUID.</p>
+            <div class="form-grid" style="grid-template-columns:1fr;">
+              <label>
+                Employee User ID (UUID)
+                <input id="employee-user-id" placeholder="e.g. 3fa85f64-5717-4562-b3fc-2c963f66afa6" spellcheck="false">
+              </label>
+            </div>
+            <div style="display:flex;gap:0.75rem;align-items:center;margin-top:0.75rem;">
+              <button id="add-employee-btn" class="btn primary" type="button" style="flex:1;">Add Employee</button>
+            </div>
+            <div id="employee-link-note" class="hint" style="margin-top:0.5rem;">Create the employee login in Supabase Auth first, then paste the user UUID here.</div>
+          </div>
+
           <div class="panel">
             <h3>Inventory Defaults</h3>
             <div class="form-grid">

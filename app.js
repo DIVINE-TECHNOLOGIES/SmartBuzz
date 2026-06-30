@@ -8,6 +8,7 @@ const state = {
   authMode: 'login',
   page: 'dashboard',
   business: null,
+  role: null, // 'owner' | 'employee'
   settings: { low_stock_threshold: 10, default_gst: 12, default_unit: 'pcs' },
   products: [],
   variants: [],
@@ -17,6 +18,7 @@ const state = {
   stockMovements: [],
   billLines: [],
 };
+
 
 const pages = {
   dashboard: ['Dashboard', 'Today at a glance'],
@@ -108,7 +110,9 @@ async function boot() {
 
     // Already logged in — wire app and go
     wireAppEvents();
+    await detectRole();
     await enterApp();
+
   } catch (err) {
     if (bootLoader) bootLoader.classList.add('hidden');
     show('auth-view');
@@ -168,9 +172,44 @@ function wireAppEvents() {
   $('apply-report-btn').addEventListener('click', renderReport);
   $('print-report-btn').addEventListener('click', () => window.print());
 
+  // Owner-only: add employee link
+  $('add-employee-btn')?.addEventListener('click', addEmployeeLink);
+
+  // If we already have a session (e.g., hot reload), make role UI correct
+  applyRoleUI();
+
+
   // Import dialog (defined in import.js)
   if (typeof wireImportEvents === 'function') wireImportEvents();
   wireQrUpload();
+}
+
+async function addEmployeeLink() {
+  try {
+    if (state.role !== 'owner') return toast('Access denied');
+    const input = $('employee-user-id');
+    if (!input) return;
+    const employeeUserId = input.value.trim();
+    if (!employeeUserId) return toast('Employee User ID is required');
+
+    setBusy(true);
+    const ownerUserId = state.session.user.id;
+
+    // Insert mapping. Employees execute on behalf of the linked owner via RLS + RPC.
+    const { error } = await state.client.from('employee_profiles').insert({
+      owner_user_id: ownerUserId,
+      employee_user_id: employeeUserId,
+      role: 'employee',
+    });
+    if (error) throw error;
+
+    input.value = '';
+    toast('Employee linked');
+  } catch (err) {
+    toast(err.message || 'Could not link employee');
+  } finally {
+    setBusy(false);
+  }
 }
 
 // ── Authentication ────────────────────────────────────────────────────────────
@@ -211,9 +250,53 @@ async function handleAuth() {
 async function enterApp() {
   show('app');
   $('user-email').textContent = state.session.user.email;
+
   await refresh();
-  navigate('dashboard');
+  applyRoleUI();
+
+  // Default landing page
+  navigate(state.role === 'employee' ? 'billing' : 'dashboard');
 }
+
+async function detectRole() {
+  // Determine role by checking if user is mapped as an employee.
+  // If mapped → employee, else → owner.
+  try {
+    const userId = state.session.user.id;
+    const { data, error } = await state.client
+      .from('employee_profiles')
+      .select('id')
+      .eq('employee_user_id', userId)
+      .maybeSingle();
+
+    if (error) throw error;
+    state.role = data ? 'employee' : 'owner';
+  } catch (e) {
+    // Fallback: treat as owner if mapping check fails
+    state.role = 'owner';
+  }
+}
+
+function applyRoleUI() {
+  // Employee allowed pages: dashboard, products, stock, billing, invoices
+  // Hidden pages: customers, reports, settings
+  const isEmp = state.role === 'employee';
+
+  const allowed = new Set(['dashboard', 'products', 'stock', 'billing', 'invoices']);
+  document.querySelectorAll('#nav button[data-page]').forEach((btn) => {
+    const page = btn.dataset.page;
+    btn.style.display = isEmp && !allowed.has(page) ? 'none' : '';
+  });
+
+  // Also hide/disable pages containers
+  document.querySelectorAll('.page').forEach((section) => {
+    const id = section.id || '';
+    const page = id.replace('page-', '');
+    if (isEmp && !allowed.has(page)) section.classList.remove('active');
+  });
+}
+
+
 
 // ── Data refresh ──────────────────────────────────────────────────────────────
 async function refresh() {
@@ -258,6 +341,12 @@ async function refresh() {
 
 // ── Navigation ────────────────────────────────────────────────────────────────
 function navigate(page) {
+  // Role guard (prevents opening hidden pages)
+  if (state.role === 'employee') {
+    const allowed = new Set(['dashboard', 'products', 'stock', 'billing', 'invoices']);
+    if (!allowed.has(page)) return toast('Access denied');
+  }
+
   state.page = page;
   document.querySelectorAll('.page').forEach((el) => el.classList.remove('active'));
   $(`page-${page}`).classList.add('active');
@@ -266,6 +355,7 @@ function navigate(page) {
   $('page-subtitle').textContent = pages[page][1];
   renderAll();
 }
+
 
 function renderAll() {
   renderDashboard();
