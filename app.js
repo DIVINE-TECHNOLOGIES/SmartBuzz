@@ -444,8 +444,12 @@ function renderProducts() {
         <td><span class="pill ${stockClass}">${currentStock(p)} ${esc(p.unit || 'pcs')}</span></td>
         <td>₹${money(p.selling_price)}</td>
         <td>${Number(p.gst_rate || 0)}%</td>
-        <td><button class="text-btn" onclick="editProduct('${p.id}')">Edit</button></td>
-      </tr>`;
+<td>
+  <button class="text-btn" onclick="editProduct('${p.id}')">Edit</button>
+  <button class="text-btn delete-btn" onclick="deleteProduct('${p.id}')">
+    Delete
+  </button>
+</td>      </tr>`;
     });
   $('products-table').innerHTML = rows.join('') || emptyRow(8, 'No products yet. Add one or import from CSV.');
   populateProductSelects();
@@ -528,6 +532,7 @@ function addVariantRow(v = {}) {
 }
 
 async function saveProduct() {
+
   const name  = $('p-name').value.trim();
   const price = Number($('p-price').value || 0);
   if (!name)    return toast('Product name is required');
@@ -1339,19 +1344,37 @@ window.saveInvoiceEdits = async function() {
   }
 };
 
+
+// ── Products: delete ─────────────────────────────────────────────────────
+
+window.deleteProduct = async function(productId) {
+  if (!productId) return;
+  if (!confirm('Delete this product? This will remove the product (and its variants).')) return;
+  setBusy(true);
+  try {
+    const { error } = await state.client.from('products').delete().eq('id', productId);
+    if (error) throw error;
+    await refresh();
+    toast('Product deleted');
+  } catch (err) {
+    toast(err.message || 'Could not delete product');
+  } finally {
+    setBusy(false);
+  }
+};
+
+// ── Invoices: delete (with stock restore) ────────────────────────────────
 window.deleteInvoice = async function() {
   const id = $('edit-inv-id').value;
   if (!id) return;
-  if (!confirm('Delete this invoice? This cannot be undone.')) return;
+  if (!confirm('Delete this invoice? Stock will be restored. This cannot be undone.')) return;
   setBusy(true);
   try {
-    // Delete items first (foreign key)
-    await state.client.from('invoice_items').delete().eq('invoice_id', id);
-    const { error } = await state.client.from('invoices').delete().eq('id', id);
+    const { error } = await state.client.rpc('delete_invoice_and_restore_stock', { p_invoice_id: id });
     if (error) throw error;
     $('invoice-edit-dialog').close();
     await refresh();
-    toast('Invoice deleted');
+    toast('Invoice deleted (stock restored)');
   } catch (err) {
     toast(err.message || 'Could not delete invoice');
   } finally {

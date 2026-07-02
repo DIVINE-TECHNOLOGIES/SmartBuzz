@@ -575,6 +575,125 @@ $$;
 -- Employees need to execute stock receive + invoice creation on behalf of the linked owner
 grant execute on function public.receive_stock(uuid, uuid, integer, text, text, date) to authenticated;
 grant execute on function public.create_invoice(uuid, date, text, text, jsonb) to authenticated;
+grant execute on function public.delete_invoice_and_restore_stock(uuid) to authenticated;
 
+-- =========================
+-- RPC: delete invoice and restore stock
+-- =========================
+-- Restores the quantities deducted during create_invoice() back into products / product_variants.
+create or replace function public.delete_invoice_and_restore_stock(
+  p_invoice_id uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user uuid := auth.uid();
+  v_owner uuid;
+  v_inv public.invoices%rowtype;
+  v_item record;
+  v_invoice_no text;
+begin
+  if v_user is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  -- Employees operate on the linked owner's data
+  v_owner := public.effective_owner_id();
+  if v_owner is null then
+    raise exception 'No owner mapping for current user';
+  end if;
+
+  select * into v_inv
+  from public.invoices
+  where id = p_invoice_id and user_id = v_owner;
+
+  if not found then
+    raise exception 'Invoice not found';
+  end if;
+
+  v_invoice_no := v_inv.invoice_no;
+
+  -- Restore stock back for each invoice item
+  -- Note: Some invoices may have variant_id = NULL even when a variant was chosen.
+  -- In that case, try to resolve variant by (product_id + variant_name).
+  for v_item in
+    select *
+    from public.invoice_items
+    where invoice_id = p_invoice_id and user_id = v_owner
+  loop
+    if v_item.variant_id is not null then
+      update public.product_variants
+      set stock_qty = stock_qty + v_item.quantity
+      where id = v_item.variant_id;
+
+      insert into public.stock_movements (
+        user_id, product_id, variant_id, movement_type, quantity, source, notes, received_date
+      ) values (
+        v_owner, v_item.product_id, v_item.variant_id, 'adjustment', v_item.quantity,
+        v_invoice_no, 'Invoice deleted — stock returned', coalesce(v_inv.invoice_date, current_date)
+      );
+    else
+      -- Try resolve variant_id from variant_name
+      if v_item.variant_name is not null and btrim(v_item.variant_name) <> '' then
+        declare
+          v_resolved_variant_id uuid;
+        begin
+          select id into v_resolved_variant_id
+          from public.product_variants
+          where product_id = v_item.product_id
+            and user_id = v_owner
+            and name = v_item.variant_name
+          limit 1;
+
+          if v_resolved_variant_id is not null then
+            update public.product_variants
+            set stock_qty = stock_qty + v_item.quantity
+            where id = v_resolved_variant_id;
+
+            insert into public.stock_movements (
+              user_id, product_id, variant_id, movement_type, quantity, source, notes, received_date
+            ) values (
+              v_owner, v_item.product_id, v_resolved_variant_id, 'adjustment', v_item.quantity,
+              v_invoice_no, 'Invoice deleted — stock returned', coalesce(v_inv.invoice_date, current_date)
+            );
+          else
+            -- Fallback: restore to base product stock
+            update public.products
+            set stock_qty = stock_qty + v_item.quantity
+            where id = v_item.product_id;
+
+            insert into public.stock_movements (
+              user_id, product_id, variant_id, movement_type, quantity, source, notes, received_date
+            ) values (
+              v_owner, v_item.product_id, null, 'adjustment', v_item.quantity,
+              v_invoice_no, 'Invoice deleted — stock returned', coalesce(v_inv.invoice_date, current_date)
+            );
+          end if;
+        end;
+      else
+        -- No variant_name either: restore to base product stock
+        update public.products
+        set stock_qty = stock_qty + v_item.quantity
+        where id = v_item.product_id;
+
+        insert into public.stock_movements (
+          user_id, product_id, variant_id, movement_type, quantity, source, notes, received_date
+        ) values (
+          v_owner, v_item.product_id, null, 'adjustment', v_item.quantity,
+          v_invoice_no, 'Invoice deleted — stock returned', coalesce(v_inv.invoice_date, current_date)
+        );
+      end if;
+    end if;
+  end loop;
+
+  -- Delete invoice items + invoice header
+  delete from public.invoice_items where invoice_id = p_invoice_id and user_id = v_owner;
+  delete from public.invoices where id = p_invoice_id and user_id = v_owner;
+end;
+$$;
 
 notify pgrst, 'reload schema';
+
