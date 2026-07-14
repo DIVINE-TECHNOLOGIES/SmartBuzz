@@ -960,9 +960,13 @@
         <!-- ADD STOCK -->
         <section id="page-stock" class="page">
           <div class="layout-2">
-            <div class="panel">
+              <div class="panel">
               <h3>Add Stock</h3>
               <div class="form-grid">
+                <label>
+                  Find product (type)
+                  <input id="stock-product-find" class="search" placeholder="e.g. soap / SKU / size" autocomplete="off">
+                </label>
                 <label>Product<select id="stock-product"></select></label>
                 <label>Variant<select id="stock-variant"></select></label>
                 <label>Quantity<input id="stock-qty" type="number" min="1" value="1"></label>

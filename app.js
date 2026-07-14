@@ -162,7 +162,9 @@ function wireAppEvents() {
   $('invoice-search').addEventListener('input', renderInvoices);
   $('stock-product').addEventListener('change', populateStockVariants);
   $('bill-product').addEventListener('change', populateBillVariants);
+  $('stock-product-find')?.addEventListener('input', () => findAndSelectStockProduct());
   $('save-stock-btn').addEventListener('click', receiveStock);
+
   $('add-line-btn').addEventListener('click', addBillLine);
   $('bill-type').addEventListener('change', renderBillLines);
   $('save-invoice-btn').addEventListener('click', saveInvoice);
@@ -401,6 +403,89 @@ function currentStock(product) {
     ? vars.reduce((sum, v) => sum + Number(v.stock_qty || 0), 0)
     : Number(product.stock_qty || 0);
 }
+
+function normalizeText(s) {
+  return String(s ?? '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function findBestStockProduct(query) {
+  const q = normalizeText(query);
+  if (!q) return null;
+
+  const tokens = q.split(' ').filter(Boolean);
+
+  const scoreProduct = (p) => {
+    const name = normalizeText(p.name);
+    const sku = normalizeText(p.sku);
+    const category = normalizeText(p.category);
+    const size = normalizeText(p.size);
+    const haystack = [name, sku, category, size].join(' ');
+
+    // If nothing matches at all, low score.
+    if (!haystack.includes(q)) {
+      // still allow partial token matches
+      const partial = tokens.reduce((acc, t) => acc + (haystack.includes(t) ? 1 : 0), 0);
+      return partial;
+    }
+
+    // Strong match
+    let score = 0;
+    // Exact-ish includes boosts
+    score += haystack.includes(q) ? 5 : 0;
+
+    // Token coverage
+    score += tokens.reduce((acc, t) => {
+      if (!t) return acc;
+      if (name.includes(t)) return acc + 3;
+      if (sku.includes(t)) return acc + 4;
+      if (category.includes(t)) return acc + 2;
+      if (size.includes(t)) return acc + 2;
+      return acc;
+    }, 0);
+
+    // Prefer SKU matches over name-only when query looks like code
+    const looksLikeSku = sku && /[0-9a-z]/i.test(q) && q.length >= 3;
+    if (looksLikeSku && sku.includes(q)) score += 6;
+
+    return score;
+  };
+
+  let best = null;
+  let bestScore = 0;
+
+  for (const p of state.products) {
+    const s = scoreProduct(p);
+    if (!best || s > bestScore) {
+      best = p;
+      bestScore = s;
+    }
+  }
+
+  // Require at least some match score
+  return bestScore > 0 ? best : null;
+}
+
+function findAndSelectStockProduct() {
+  const input = $('stock-product-find');
+  if (!input) return;
+
+  const query = input.value;
+  const best = findBestStockProduct(query);
+
+  if (!best) {
+    // Do not destroy current manual selection; just notify.
+    const q = normalizeText(query);
+    if (q) toast('Product not found');
+    return;
+  }
+
+  $('stock-product').value = best.id;
+  populateStockVariants();
+}
+
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 function renderDashboard() {
