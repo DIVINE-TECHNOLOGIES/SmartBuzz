@@ -1014,10 +1014,10 @@
                   <label>
                     Invoice Type
                     <select id="bill-type" onchange="renderBillLines()">
-                      <option value="tax_invoice">Delivery Challan</option>
-                      <option value="retail">Proforma</option>
-                      <option value="proforma">Reatail Invoice</option>
-                      <option value="challan">Tax Invoice</option>
+                      <option value="challan">Delivery Challan</option>
+                      <option value="proforma">Proforma</option>
+                      <option value="retail">Retail Invoice</option>
+                      <option value="tax_invoice">Tax Invoice</option>
                     </select>
                   </label>
                 </div>
@@ -1049,6 +1049,12 @@
               <!-- Add Item Section -->
               <div class="add-item-section">
                 <h4>Add Item</h4>
+                <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.75rem;">
+                  <label style="flex:1;">
+                    Find product
+                    <input id="bill-product-find" class="search" placeholder="e.g. soap / SKU / size" autocomplete="off">
+                  </label>
+                </div>
                 <div class="add-item-grid">
                   <label>
                     Product

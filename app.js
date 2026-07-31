@@ -163,6 +163,7 @@ function wireAppEvents() {
   $('stock-product').addEventListener('change', populateStockVariants);
   $('bill-product').addEventListener('change', populateBillVariants);
   $('stock-product-find')?.addEventListener('input', () => findAndSelectStockProduct());
+  $('bill-product-find')?.addEventListener('input', () => findAndSelectBillProduct());
   $('save-stock-btn').addEventListener('click', receiveStock);
 
   $('add-line-btn').addEventListener('click', addBillLine);
@@ -485,6 +486,25 @@ function findAndSelectStockProduct() {
   $('stock-product').value = best.id;
   populateStockVariants();
 }
+
+function findAndSelectBillProduct() {
+  const input = $('bill-product-find');
+  if (!input) return;
+
+  const query = input.value;
+  const best = findBestStockProduct(query);
+
+  if (!best) {
+    // Do not destroy current manual selection; just notify.
+    const q = normalizeText(query);
+    if (q) toast('Product not found');
+    return;
+  }
+
+  $('bill-product').value = best.id;
+  populateBillVariants();
+}
+
 
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -1370,54 +1390,26 @@ window.saveInvoiceEdits = async function() {
   if (!id || !editLines.length) return toast('Invoice must have at least one item');
   setBusy(true);
   try {
-    const isChallan = $('edit-inv-type').value === 'challan';
-    let subtotal = 0, gstTotal = 0;
-
-    const newItems = editLines.map((line) => {
-      const base = line.quantity * line.unit_price;
-      const tax  = isChallan ? 0 : Math.round(base * line.gst_rate) / 100;
-      subtotal  += base;
-      gstTotal  += tax;
-      const product = state.products.find((p) => p.id === line.product_id);
-      const variant = state.variants.find((v) => v.id === line.variant_id);
-      return {
-        user_id:       state.session.user.id,
-        invoice_id:    id,
-        product_id:    line.product_id,
-        variant_id:    line.variant_id || null,
-        product_name:  product?.name || line.name,
-        variant_name:  variant?.name || null,
-        hsn:           product?.hsn || null,
-        quantity:      line.quantity,
-        unit_price:    line.unit_price,
-        gst_rate:      line.gst_rate,
-        line_subtotal: parseFloat(base.toFixed(2)),
-        line_gst:      parseFloat(tax.toFixed(2)),
-        line_total:    parseFloat((base + tax).toFixed(2)),
-      };
+    // Single atomic RPC call: replaces the old client-side
+    // delete-items -> insert-items -> update-header sequence, which could
+    // partially fail (e.g. the header update) and leave the invoice items
+    // and header out of sync, and which also updated invoice_items with a
+    // raw auth user id instead of the effective owner id (broken for
+    // employee logins). See update_invoice() in supabase-schema.sql.
+    const { error } = await state.client.rpc('update_invoice', {
+      p_invoice_id:   id,
+      p_invoice_date: $('edit-inv-date').value,
+      p_invoice_type: $('edit-inv-type').value,
+      p_payment_mode: $('edit-inv-payment').value,
+      p_notes:        $('edit-inv-notes').value.trim() || null,
+      p_items: editLines.map((line) => ({
+        product_id: line.product_id,
+        variant_id: line.variant_id || null,
+        quantity:   line.quantity,
+        unit_price: line.unit_price,
+      })),
     });
-    const total = subtotal + gstTotal;
-
-    // Delete old items and re-insert (simpler than diffing)
-    const { error: delErr } = await state.client
-      .from('invoice_items').delete().eq('invoice_id', id);
-    if (delErr) throw delErr;
-
-    const { error: insErr } = await state.client
-      .from('invoice_items').insert(newItems);
-    if (insErr) throw insErr;
-
-    // Update invoice header
-    const { error: updErr } = await state.client.from('invoices').update({
-      invoice_date: $('edit-inv-date').value,
-      payment_mode: $('edit-inv-payment').value,
-      invoice_type: $('edit-inv-type').value,
-      notes:        $('edit-inv-notes').value.trim() || null,
-      subtotal:     parseFloat(subtotal.toFixed(2)),
-      gst_total:    parseFloat(gstTotal.toFixed(2)),
-      total:        parseFloat(total.toFixed(2)),
-    }).eq('id', id);
-    if (updErr) throw updErr;
+    if (error) throw error;
 
     $('invoice-edit-dialog').close();
     await refresh();

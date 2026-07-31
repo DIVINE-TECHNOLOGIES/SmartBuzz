@@ -129,6 +129,7 @@ create table if not exists public.invoices (
   invoice_date date not null default current_date,
   invoice_type text not null default 'tax_invoice',
   payment_mode text not null default 'Cash',
+  notes text,
   subtotal numeric(12,2) not null default 0,
   gst_total numeric(12,2) not null default 0,
   total numeric(12,2) not null default 0,
@@ -137,6 +138,10 @@ create table if not exists public.invoices (
   unique(user_id, invoice_seq),
   unique(user_id, invoice_no)
 );
+
+-- Safety net for projects that already had this table created before
+-- the `notes` column existed (see migration notes in README).
+alter table public.invoices add column if not exists notes text;
 
 create table if not exists public.invoice_items (
   id uuid primary key default gen_random_uuid(),
@@ -572,9 +577,176 @@ exception
 end;
 $$;
 
+-- =========================
+-- RPC: update_invoice
+-- =========================
+-- Edits an existing invoice atomically: restores stock for the old line
+-- items, replaces the line items with the new ones (adjusting stock for
+-- the new quantities), and updates the invoice header (date, type,
+-- payment mode, notes, and recalculated totals) in a single transaction.
+-- Using an RPC (instead of separate client-side delete/insert/update calls)
+-- means a failure partway through cannot leave items and header out of
+-- sync, and it correctly resolves the effective owner for employee logins.
+create or replace function public.update_invoice(
+  p_invoice_id uuid,
+  p_invoice_date date,
+  p_invoice_type text,
+  p_payment_mode text,
+  p_notes text,
+  p_items jsonb
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user uuid := auth.uid();
+  v_owner uuid;
+  v_old_item record;
+  v_item jsonb;
+  v_product products%rowtype;
+  v_variant product_variants%rowtype;
+  v_product_id uuid;
+  v_variant_id uuid;
+  v_qty integer;
+  v_price numeric(12,2);
+  v_subtotal numeric(12,2) := 0;
+  v_gst numeric(12,2) := 0;
+  v_total numeric(12,2) := 0;
+  v_line_subtotal numeric(12,2);
+  v_line_gst numeric(12,2);
+  v_line_total numeric(12,2);
+begin
+  if v_user is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  -- Employees edit invoices on behalf of their linked owner
+  v_owner := public.effective_owner_id();
+  if v_owner is null then
+    raise exception 'No owner mapping for current user';
+  end if;
+
+  if not exists (
+    select 1 from public.invoices where id = p_invoice_id and user_id = v_owner
+  ) then
+    raise exception 'Invoice not found';
+  end if;
+
+  if jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
+    raise exception 'Invoice needs at least one item';
+  end if;
+
+  -- Give back the stock that the OLD line items had reserved before we
+  -- remove them, so quantity changes net out correctly either direction.
+  for v_old_item in
+    select product_id, variant_id, quantity
+    from public.invoice_items
+    where invoice_id = p_invoice_id and user_id = v_owner
+  loop
+    if v_old_item.variant_id is not null then
+      update public.product_variants
+      set stock_qty = stock_qty + v_old_item.quantity
+      where id = v_old_item.variant_id;
+    end if;
+    update public.products
+    set stock_qty = stock_qty + v_old_item.quantity
+    where id = v_old_item.product_id;
+  end loop;
+
+  delete from public.invoice_items where invoice_id = p_invoice_id and user_id = v_owner;
+
+  for v_item in select * from jsonb_array_elements(p_items) loop
+    v_product_id := (v_item ->> 'product_id')::uuid;
+    v_variant_id := nullif(v_item ->> 'variant_id', '')::uuid;
+    v_qty := (v_item ->> 'quantity')::integer;
+    v_price := (v_item ->> 'unit_price')::numeric;
+
+    if v_qty is null or v_qty <= 0 then
+      raise exception 'Invalid item quantity';
+    end if;
+    if v_price is null or v_price < 0 then
+      raise exception 'Invalid item price';
+    end if;
+
+    select * into v_product
+    from public.products
+    where id = v_product_id and user_id = v_owner
+    for update;
+
+    if not found then
+      raise exception 'Product not found';
+    end if;
+
+    if v_variant_id is not null then
+      select * into v_variant
+      from public.product_variants
+      where id = v_variant_id and product_id = v_product_id and user_id = v_owner
+      for update;
+
+      if not found then
+        raise exception 'Variant not found';
+      end if;
+      if v_variant.stock_qty < v_qty then
+        raise exception 'Insufficient stock for %', v_product.name || ' - ' || v_variant.name;
+      end if;
+
+      update public.product_variants
+      set stock_qty = stock_qty - v_qty
+      where id = v_variant_id;
+    else
+      if v_product.stock_qty < v_qty then
+        raise exception 'Insufficient stock for %', v_product.name;
+      end if;
+    end if;
+
+    update public.products
+    set stock_qty = stock_qty - v_qty
+    where id = v_product_id;
+
+    v_line_subtotal := round(v_qty * v_price, 2);
+    v_line_gst := case
+      when coalesce(p_invoice_type, '') = 'challan' then 0
+      else round(v_line_subtotal * coalesce(v_product.gst_rate, 0) / 100, 2)
+    end;
+    v_line_total := v_line_subtotal + v_line_gst;
+
+    v_subtotal := v_subtotal + v_line_subtotal;
+    v_gst := v_gst + v_line_gst;
+    v_total := v_total + v_line_total;
+
+    insert into public.invoice_items (
+      user_id, invoice_id, product_id, variant_id, product_name, variant_name, hsn,
+      quantity, unit_price, gst_rate, line_subtotal, line_gst, line_total
+    )
+    values (
+      v_owner, p_invoice_id, v_product_id, v_variant_id, v_product.name,
+      case when v_variant_id is null then null else v_variant.name end,
+      v_product.hsn, v_qty, v_price, v_product.gst_rate,
+      v_line_subtotal, v_line_gst, v_line_total
+    );
+  end loop;
+
+  update public.invoices
+  set invoice_date  = coalesce(p_invoice_date, invoice_date),
+      invoice_type  = coalesce(nullif(p_invoice_type, ''), 'tax_invoice'),
+      payment_mode  = coalesce(nullif(p_payment_mode, ''), 'Cash'),
+      notes         = nullif(p_notes, ''),
+      subtotal      = v_subtotal,
+      gst_total     = v_gst,
+      total         = v_total
+  where id = p_invoice_id and user_id = v_owner;
+exception
+  when others then
+    raise;
+end;
+$$;
+
 -- Employees need to execute stock receive + invoice creation on behalf of the linked owner
 grant execute on function public.receive_stock(uuid, uuid, integer, text, text, date) to authenticated;
 grant execute on function public.create_invoice(uuid, date, text, text, jsonb) to authenticated;
+grant execute on function public.update_invoice(uuid, date, text, text, text, jsonb) to authenticated;
 grant execute on function public.delete_invoice_and_restore_stock(uuid) to authenticated;
 
 -- =========================
@@ -696,4 +868,3 @@ end;
 $$;
 
 notify pgrst, 'reload schema';
-
